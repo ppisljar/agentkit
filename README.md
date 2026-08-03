@@ -142,7 +142,9 @@ Run exactly one loop. Two would race to claim the same task.
 
 - **No auth.** The router assumes the host app protects its own admin routes. Mount it behind
   whatever authentication you already have; it does not add any.
-- **`http/flask_bp.py` is untested** — written for parity, but no consumer exercises it yet.
+- **`http/flask_bp.py` has no real consumer yet.** A test asserts it builds and exposes the
+  same routes as the FastAPI adapter, but its behaviour is unexercised until HomeFlix
+  migrates onto it.
 - **Adapters have no post-run hook**, so a scrape cannot trigger follow-up work (a rebuild, a
   re-index). See `TODO.md`.
 - **`yaml` config validation is optional** — install `pyyaml` or malformed YAML is written as-is.
@@ -154,6 +156,7 @@ Run exactly one loop. Two would race to claim the same task.
 pip install -e '.[dev]' && pytest
 ```
 
-20 tests cover the store, registry overrides, the report/approval loop, job lifecycle including
-failures, config masking and path-escape refusal, scheduler task registration, and the
-cross-process run-request and heartbeat paths — none require network, Claude Code or systemd.
+21 tests cover the store, registry overrides, the report/approval loop, job lifecycle including
+failures, config masking and path-escape refusal, scheduler task registration, the cross-process
+run-request and heartbeat paths, and route parity between the two HTTP adapters — none require
+network, Claude Code or systemd.

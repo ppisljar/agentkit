@@ -23,8 +23,8 @@ broken; this is consolidation, not a fix.
 
 **Known obstacles**
 
-1. **Flask, not FastAPI.** `http/flask_bp.py` exists but is unexercised — it needs a real
-   consumer and tests before trusting it.
+1. **Flask, not FastAPI.** `http/flask_bp.py` exists and a test asserts route parity with the
+   FastAPI adapter, but no consumer exercises its behaviour yet — expect to find rough edges.
 2. **Data migration.** HomeFlix has live history in the old tables. Needs a one-off copy into the
    `ck_*` tables (`reports` → `ck_reports`, `report_questions` → `ck_report_items`, noting the
    column rename and the `kind` split into question/proposal).
@@ -42,7 +42,6 @@ swap the backend modules → swap the routes → swap the UI → delete the orig
 
 ## Other
 
-- **`http/flask_bp.py` is untested.** Written for parity, no consumer yet. Needs tests.
 - **No auth.** The router assumes the host protects its own admin routes.
 - **Post-run hooks.** Adapters cannot yet trigger follow-up work (see obstacle 4).
 - **Job log retention.** `ck_jobs.log` keeps the last 64KB per job and rows are never pruned;

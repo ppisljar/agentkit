@@ -245,3 +245,42 @@ def test_start_without_scheduler_leaves_loop_unclaimed(kit):
     kit.start(run_scheduler=False)
     assert kit.scheduler.in_process is False
     assert kit.scheduler.get('scraper') is not None   # tasks still registered
+
+
+def _routes(kit, kind):
+    """Build one adapter and return its route paths, so parity is checked mechanically."""
+    if kind == 'fastapi':
+        r = kit.fastapi_router()
+        return {route.path for route in r.routes}
+    bp = kit.flask_blueprint()
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(bp)
+    return {str(r.rule) for r in app.url_map.iter_rules() if r.endpoint != 'static'}
+
+
+def test_both_http_adapters_build_and_agree(kit):
+    """Both adapters must exist and expose the same surface.
+
+    Guards the specific mistake of documenting an adapter that was never written.
+    """
+    pytest.importorskip('fastapi')
+    pytest.importorskip('flask')
+
+    fastapi_paths = _routes(kit, 'fastapi')
+    flask_paths = _routes(kit, 'flask')
+
+    # normalise the two frameworks' parameter syntaxes: {x} / {x:int} vs <x> / <int:x>
+    import re
+    def norm(paths):
+        out = set()
+        for p in paths:
+            p = re.sub(r'\{[^}]*\}', '*', p)
+            p = re.sub(r'<[^>]*>', '*', p)
+            out.add(p.rstrip('/'))
+        return out
+
+    assert norm(fastapi_paths) == norm(flask_paths), (
+        f"only in fastapi: {norm(fastapi_paths) - norm(flask_paths)}\n"
+        f"only in flask:   {norm(flask_paths) - norm(fastapi_paths)}")
+    assert len(fastapi_paths) > 15
