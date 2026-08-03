@@ -43,10 +43,16 @@ class Kit:
         self.store = Store(cfg)
         self.scheduler = Scheduler(cfg, self.store)
 
-    def start(self) -> None:
-        """Create tables, register declared tasks and start the scheduler loop."""
+    def start(self, run_scheduler: bool = True) -> None:
+        """Create tables, register declared tasks and optionally start the scheduler loop.
+
+        Pass `run_scheduler=False` in the web process when the scheduler runs as a separate
+        daemon (see `claudekit.daemon`) — two live loops would race to claim the same task.
+        """
         self.store.connect()
-        self.scheduler.start()
+        self.scheduler.sync_tasks()
+        if run_scheduler:
+            self.scheduler.start()
 
     def stop(self) -> None:
         self.scheduler.stop()

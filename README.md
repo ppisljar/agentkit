@@ -113,14 +113,40 @@ so they can share a host's existing SQLite file without colliding.
 | `ck_jobs` | background jobs and their logs |
 | `ck_schedule_task` | adapters and scheduled agents |
 
+## Running the scheduler as its own process
+
+By default `Kit.start()` runs the scheduler loop in a background thread inside the host process,
+which is fine for development. In production a web-server restart would then kill any in-flight
+scrape or agent run — so run the loop separately:
+
+```python
+# web process
+KIT.start(run_scheduler=False)      # registers tasks, does NOT own the loop
+```
+
+```python
+# scheduler process:  python -m claudekit.daemon kit_config
+from kit_config import KIT
+from claudekit import daemon
+daemon.run(KIT)
+```
+
+The two processes share nothing but the SQLite database. The web process records a request
+(`ck_schedule_task.run_requested`); the daemon claims it on its next tick (2s), clears the marker
+so it runs exactly once, and does the work. `Scheduler.alive` reads a heartbeat rather than a
+thread handle, so the web process can report the daemon's health without sharing memory with it.
+
+Run exactly one loop. Two would race to claim the same task.
+
 ## Known limitations
 
-- **The scheduler runs in-process.** A host restart interrupts an in-flight run; those jobs are
-  reported as `interrupted` rather than hanging. HomeFlix used a separate daemon so crawls survived
-  a web-server reload — port that if you need it.
 - **No auth.** The router assumes the host app protects its own admin routes. Mount it behind
   whatever authentication you already have; it does not add any.
+- **`http/flask_bp.py` is untested** — written for parity, but no consumer exercises it yet.
+- **Adapters have no post-run hook**, so a scrape cannot trigger follow-up work (a rebuild, a
+  re-index). See `TODO.md`.
 - **`yaml` config validation is optional** — install `pyyaml` or malformed YAML is written as-is.
+- **Job rows are never pruned**; each keeps up to 64KB of log tail.
 
 ## Tests
 
@@ -128,6 +154,6 @@ so they can share a host's existing SQLite file without colliding.
 pip install -e '.[dev]' && pytest
 ```
 
-15 tests cover the store, registry overrides, the report/approval loop, job lifecycle including
-failures, config masking and path-escape refusal, and scheduler task registration — none require
-network, Claude Code or systemd.
+20 tests cover the store, registry overrides, the report/approval loop, job lifecycle including
+failures, config masking and path-escape refusal, scheduler task registration, and the
+cross-process run-request and heartbeat paths — none require network, Claude Code or systemd.

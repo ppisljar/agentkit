@@ -6,6 +6,7 @@ Errors from the core map onto status codes here so the core never imports a web 
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from fastapi import APIRouter, Body, HTTPException, Query
@@ -29,6 +30,29 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
         except (ValueError, FileNotFoundError) as e:
             raise HTTPException(400, str(e)) from e
 
+    def _start(task: str) -> dict:
+        """Start a task, whichever process owns the scheduler.
+
+        In-process we start it directly and get a job id straight away. With a separate daemon we
+        leave a request and wait briefly for it to pick the task up, so the UI still receives a job
+        id to poll in the common case instead of having to guess.
+        """
+        if sched.in_process:
+            return _guard(sched.run_now, task)
+
+        before = {j["id"] for j in jobs.recent(store, limit=10)}
+        res = _guard(sched.request_run, task)
+        deadline = time.time() + 6
+        while time.time() < deadline:
+            time.sleep(0.4)
+            for j in jobs.recent(store, limit=10):
+                if j["id"] not in before and (j.get("params") or {}).get("task") == task:
+                    return {"ok": True, "task": task, "job": j["id"]}
+        # The daemon may simply be down; say so rather than reporting a silent success.
+        return {**res, "scheduler_alive": sched.alive,
+                "note": "queued — the scheduler will pick it up"
+                        if sched.alive else "scheduler daemon is not running"}
+
     # ------------------------------------------------------------------ health
     @r.get("/health")
     def health() -> dict:
@@ -37,6 +61,7 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
             "app": cfg.app_name,
             "root": str(cfg.root),
             "scheduler": sched.alive,
+            "scheduler_mode": "in-process" if sched.in_process else "daemon",
             "claude": cfg.claude_available(),
             "agents": len(cfg.agents),
             "adapters": len(cfg.adapters),
@@ -70,7 +95,7 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
     def run_agent(name: str) -> dict:
         _guard(registry.resolve, cfg, store, name)
         sched._ensure(name, "agent", hour=registry.get_hour(cfg, store, name))
-        return _guard(sched.run_now, name)
+        return _start(name)
 
     # -------------------------------------------------------------- transcripts
     @r.get("/agent_history")
@@ -153,7 +178,7 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
 
     @r.post("/schedule/{task}/run")
     def run_task(task: str) -> dict:
-        return _guard(sched.run_now, task)
+        return _start(task)
 
     # -------------------------------------------------------------------- jobs
     @r.get("/jobs")

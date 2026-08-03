@@ -202,3 +202,46 @@ def test_sudoers_snippet_is_minimal(kit):
     snip = services.sudoers_snippet(kit.cfg, "ppisljar")
     assert "restart x.service" in snip
     assert "stop" not in snip                              # not an allowed action
+
+
+def test_run_request_is_picked_up_by_due(kit):
+    """A web process leaves a marker; the loop owner claims it exactly once."""
+    kit.scheduler.request_run('scraper')
+    assert kit.scheduler.get('scraper')['run_requested'] is not None
+
+    due = kit.scheduler.due()
+    assert 'scraper' in due
+    # the marker is cleared when claimed, so a second tick does not re-run it
+    assert kit.scheduler.get('scraper')['run_requested'] is None
+    assert 'scraper' not in kit.scheduler.due()
+
+
+def test_run_request_works_on_disabled_task(kit):
+    """An explicit 'Run now' must work even when the task is not scheduled."""
+    assert kit.scheduler.get('scraper')['enabled'] == 0
+    kit.scheduler.request_run('scraper')
+    assert 'scraper' in kit.scheduler.due()
+
+
+def test_request_run_unknown_task(kit):
+    with pytest.raises(KeyError):
+        kit.scheduler.request_run('nope')
+
+
+def test_alive_uses_heartbeat_across_processes(kit):
+    """`alive` must work for a reader that shares only the database."""
+    import time as _t
+    from claudekit.scheduler import HEARTBEAT_KEY
+
+    assert kit.scheduler.alive is False          # nothing has beaten yet
+    kit.store.set_meta(HEARTBEAT_KEY, str(_t.time()))
+    assert kit.scheduler.alive is True           # a fresh beat means someone owns the loop
+    assert kit.scheduler.in_process is False     # ...but not this process
+    kit.store.set_meta(HEARTBEAT_KEY, str(_t.time() - 3600))
+    assert kit.scheduler.alive is False          # stale beat -> the owner is gone
+
+
+def test_start_without_scheduler_leaves_loop_unclaimed(kit):
+    kit.start(run_scheduler=False)
+    assert kit.scheduler.in_process is False
+    assert kit.scheduler.get('scraper') is not None   # tasks still registered

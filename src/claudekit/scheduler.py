@@ -25,7 +25,12 @@ from .config import KitConfig
 from .store import Store
 
 DEFAULT_INTERVAL = 6 * 3600
-TICK_SEC = 30
+# Short tick: it is two cheap SQLite reads, and it bounds how long a "Run now" from the web
+# process waits before the daemon notices the request.
+TICK_SEC = 2
+HEARTBEAT_KEY = "scheduler_heartbeat"
+# A heartbeat older than this means whoever was running the loop is gone.
+HEARTBEAT_STALE_SEC = 15
 
 
 def _now() -> float:
@@ -206,32 +211,69 @@ class Scheduler:
                      result=f"report {rid}")
 
     # ---------------------------------------------------------------- loop
+    def request_run(self, task: str) -> dict:
+        """Ask whoever owns the loop to start `task`.
+
+        Used by the web process when the scheduler lives in a separate daemon: it cannot start the
+        work itself (the child would die with the request), so it leaves a marker the daemon picks
+        up on its next tick.
+        """
+        if not self.get(task):
+            raise KeyError(f"unknown task: {task}")
+        self.store.execute("UPDATE ck_schedule_task SET run_requested=? WHERE task=?",
+                           (_now(), task))
+        return {"ok": True, "task": task, "queued": True}
+
     def due(self) -> list[str]:
+        """Tasks to start now: explicitly requested ones first, then those past their next_run."""
         self._ensure_synced()
         now = _now()
         out = []
+
+        # Explicit requests run even when the task is disabled or paused — the human asked.
+        for r in self.store.query(
+                "SELECT task FROM ck_schedule_task WHERE run_requested IS NOT NULL"):
+            self.store.execute("UPDATE ck_schedule_task SET run_requested=NULL WHERE task=?",
+                               (r["task"],))
+            if r["task"] not in self._running:
+                out.append(r["task"])
+
         for r in self.store.query(
                 "SELECT * FROM ck_schedule_task WHERE enabled=1 AND paused=0"):
-            if r["task"] in self._running:
+            if r["task"] in self._running or r["task"] in out:
                 continue
             nxt = r["next_run"]
-            if nxt is None:
-                out.append(r["task"])
-            elif float(nxt) <= now:
+            if nxt is None or float(nxt) <= now:
                 out.append(r["task"])
         return out
 
+    def _beat(self) -> None:
+        self.store.set_meta(HEARTBEAT_KEY, str(_now()))
+
     def _loop(self) -> None:
+        n = 0
         while not self._stop.is_set():
             try:
-                self.sync_tasks()   # re-sync each tick: a host may add adapters at runtime
+                self._beat()
+                # Re-syncing every tick would be wasteful at a 2s cadence; a host adding adapters
+                # at runtime is rare, so check roughly every 30s.
+                if n % 15 == 0:
+                    self.sync_tasks()
+                n += 1
                 for task in self.due():
                     self.run_now(task)
             except Exception:  # noqa: BLE001 — a scheduler must never die on one bad tick
                 pass
             self._stop.wait(TICK_SEC)
 
+    def run_forever(self) -> None:
+        """Run the loop in the calling thread — the entry point for the standalone daemon."""
+        self.sync_tasks()
+        self._stop.clear()
+        self._loop()
+
     def start(self) -> None:
+        """Run the loop in a background thread inside the host process."""
         if self._thread and self._thread.is_alive():
             return
         self.sync_tasks()
@@ -244,4 +286,19 @@ class Scheduler:
 
     @property
     def alive(self) -> bool:
+        """True if a loop is running — in this process or another one.
+
+        Falls back to the heartbeat so a web process can report the daemon's health without
+        sharing memory with it.
+        """
+        if self._thread and self._thread.is_alive():
+            return True
+        beat = self.store.get_meta(HEARTBEAT_KEY)
+        try:
+            return beat is not None and (_now() - float(beat)) < HEARTBEAT_STALE_SEC
+        except (TypeError, ValueError):
+            return False
+
+    @property
+    def in_process(self) -> bool:
         return bool(self._thread and self._thread.is_alive())

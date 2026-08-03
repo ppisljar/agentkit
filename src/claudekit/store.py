@@ -55,9 +55,17 @@ CREATE TABLE IF NOT EXISTS ck_schedule_task (
   interval_sec INTEGER, hour INTEGER,
   args TEXT,
   last_run REAL, last_duration_sec INTEGER, last_status TEXT,
-  last_result TEXT, last_error TEXT, next_run REAL
+  last_result TEXT, last_error TEXT, next_run REAL,
+  -- set by the web process to ask the scheduler (possibly another process) to run this now
+  run_requested REAL
 );
 """
+
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS cannot add a column to an
+# existing table, so they are ALTERed in on connect.
+_ADDED_COLUMNS = {
+    "ck_schedule_task": {"run_requested": "REAL"},
+}
 
 
 class Store:
@@ -83,9 +91,28 @@ class Store:
             with self._init_lock:
                 if not self._ready:
                     con.executescript(SCHEMA)
+                    self._add_missing_columns(con)
                     con.commit()
                     self._ready = True
         return con
+
+    @staticmethod
+    def _add_missing_columns(con: sqlite3.Connection) -> None:
+        for table, cols in _ADDED_COLUMNS.items():
+            have = {r["name"] for r in con.execute(f"PRAGMA table_info({table})")}
+            for name, decl in cols.items():
+                if name not in have:
+                    con.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+    # -- cross-process heartbeat ---------------------------------------------
+    # `alive` cannot be a thread handle once the scheduler may live in another process, so the
+    # running scheduler stamps a timestamp and readers judge freshness.
+    def set_meta(self, key: str, value: str) -> None:
+        self.execute("INSERT OR REPLACE INTO ck_schedule_meta (k, v) VALUES (?,?)", (key, value))
+
+    def get_meta(self, key: str) -> str | None:
+        r = self.one("SELECT v FROM ck_schedule_meta WHERE k=?", (key,))
+        return r["v"] if r else None
 
     # -- small helpers so callers don't repeat cursor boilerplate -------------
     def query(self, sql: str, params: tuple = ()) -> list[sqlite3.Row]:
