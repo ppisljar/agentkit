@@ -37,6 +37,12 @@ module.exports = {
         // (or red) in a dark theme, so its label must stay light even where `white` has been
         // inverted to a dark surface. Sharing one token for both would make one of them illegible.
         onaccent: 'rgb(var(--ck-on-accent) / <alpha-value>)',
+        // A surface deliberately set AGAINST the page — log output, an active filter chip. These
+        // are dark-on-light in a light theme, so they must become light-on-dark in a dark one.
+        // Expressing them with the grey ramp inverts them the wrong way: a "dark code block"
+        // turns into a glaring light rectangle on a dark page.
+        contrast: 'rgb(var(--ck-contrast) / <alpha-value>)',
+        oncontrast: 'rgb(var(--ck-on-contrast) / <alpha-value>)',
       },
     },
   },

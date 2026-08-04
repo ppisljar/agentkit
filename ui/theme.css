@@ -21,4 +21,7 @@
   --ck-white: 255 255 255;
   --ck-black: 0 0 0;
   --ck-on-accent: 255 255 255;
+  /* stands against the page: dark block, light ink (matches the previous gray-900/gray-100 pair) */
+  --ck-contrast: 17 24 39;
+  --ck-on-contrast: 243 244 246;
 }

@@ -19,7 +19,7 @@ import { Badge, Button, Card, Empty, ErrorNote, LogBox, Markdown, Spinner, cx } 
 export type ProjectTag = { key: string; label: string; color?: string; url?: string }
 
 export function KitReports({ base = '/api/kit', agentLabels, projects, title, subtitle,
-                            onRunNow, runNowLabel }: {
+                            onRunNow, runNowLabel, inlineDetail }: {
   base?: string
   /** Optional agent-id -> display name, so rows read "Daily health check" rather than "selfcheck".
    *  Left to the host because the kit doesn't know which of an app's agents deserve friendlier
@@ -35,6 +35,11 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
    *  the host supplies the action and the label, and the button simply isn't rendered without it. */
   onRunNow?: () => Promise<unknown> | void
   runNowLabel?: string
+  /** Expand a report IN PLACE instead of replacing the list with a detail page. An accordion keeps
+   *  the other reports visible while you read one, which matters when you are comparing runs or
+   *  working down a list; the page view suits a fleet, where a report can be long and belongs to
+   *  one project at a time. Hosts choose. */
+  inlineDetail?: boolean
 }) {
   const api = React.useMemo(() => new KitApi(base), [base])
   const [reports, setReports] = React.useState<Report[]>([])
@@ -156,7 +161,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
         </Card>
       )}
 
-      {open ? (
+      {open && !inlineDetail ? (
         <ReportDetail api={api} report={open} agentLabels={agentLabels} project={byKey[open.project!]}
           onBack={() => { setOpen(null); load() }}
           onChanged={() => refreshOpen(open.id)} onError={setErr} />
@@ -179,9 +184,12 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
           )}
 
           <div className="space-y-3">
-            {reports.map((r) => (
-              <button key={r.id} onClick={() => refreshOpen(r.id)}
-                className="block w-full rounded-xl border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-gray-300 hover:shadow">
+            {reports.map((r) => {
+            const expanded = !!inlineDetail && open?.id === r.id
+            return (
+              <div key={r.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition hover:border-gray-300">
+              <button onClick={() => (expanded ? setOpen(null) : refreshOpen(r.id))}
+                className="block w-full p-4 text-left">
                 <div className="flex flex-wrap items-center gap-2">
                   <ProjectPill project={byKey[r.project!]} />
                   <Badge tone={r.status}>{r.status}</Badge>
@@ -194,9 +202,19 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
                 {r.summary && <p className="mt-2 text-sm text-gray-600">{r.summary}</p>}
                 <div className="mt-2 text-xs text-gray-400">
                   {(r.findings || []).length} findings · {r.duration_sec}s
+                  {inlineDetail && <span className="float-right">{expanded ? '▾' : '▸'}</span>}
                 </div>
               </button>
-            ))}
+              {expanded && open && (
+                <div className="border-t border-gray-100 px-4 pb-4 pt-3">
+                  <ReportDetail api={api} report={open} agentLabels={agentLabels}
+                    project={byKey[open.project!]} inline
+                    onBack={() => setOpen(null)}
+                    onChanged={() => refreshOpen(open.id)} onError={setErr} />
+                </div>
+              )}
+              </div>
+            )})}
           </div>
         </>
       )}
@@ -238,11 +256,14 @@ function FindingLine({ f }: { f: Finding | string }) {
   )
 }
 
-function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project }: {
+function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project, inline }: {
   api: KitApi; report: Report; onBack: () => void; onChanged: () => void
   onError: (e: string) => void
   agentLabels?: Record<string, string>
   project?: ProjectTag
+  /** Rendered inside its own row (accordion) rather than as a page: the row above already gives
+   *  the way back, so a "← All reports" link would be a dead control. */
+  inline?: boolean
 }) {
   const [showRaw, setShowRaw] = React.useState(false)
   // In fleet mode the id is namespaced ("homeflix:23"); show the project as a pill and the
@@ -250,7 +271,9 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
   const shown = report.local_id ?? report.id
   return (
     <div className="space-y-4">
-      <button onClick={onBack} className="text-sm text-blue-600 hover:underline">← All reports</button>
+      {!inline && (
+        <button onClick={onBack} className="text-sm text-blue-600 hover:underline">← All reports</button>
+      )}
 
       <Card title={`${agentLabels?.[report.agent] || report.agent} · report #${shown}`}
         subtitle={`${fmtAgo(report.created)} · ${report.duration_sec}s`}
@@ -529,7 +552,7 @@ function ProjectFilter({ projects, value, onChange }: {
 }) {
   const chip = (active: boolean) => cx(
     'rounded-full border px-3 py-1 text-sm font-medium transition',
-    active ? 'border-gray-900 bg-gray-900 text-white'
+    active ? 'border-contrast bg-contrast text-oncontrast'
       : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50')
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">

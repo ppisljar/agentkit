@@ -191,7 +191,7 @@ export function LogBox({ text, className }: { text?: string | null; className?: 
         const el = e.currentTarget
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
       }}
-      className={cx('max-h-72 overflow-auto rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-gray-100',
+      className={cx('max-h-72 overflow-auto rounded-lg bg-contrast p-3 text-xs leading-relaxed text-oncontrast',
         className)}
     >
       {text}
