@@ -125,6 +125,15 @@ edited in the UI — baking hints into each `AgentSpec` means customising one ag
 them. Appending is idempotent, and an agent can opt out with `AgentSpec(no_hints=True)` (a
 conversational agent shouldn't be told nobody will ever reply to it).
 
+## Scheduling everything at once
+
+`POST /schedule/run` with no task runs every enabled, unpaused one and reports what it started
+versus skipped. `POST /schedule/interval {sec}` sets one crawl interval across all adapters.
+
+That second one is a **write-through**, not a fallback: a task whose `interval_sec` is NULL never
+reschedules, so "inherits the global" would be a silent trap where adapters run once and go quiet.
+Agents are left alone — they are scheduled by hour.
+
 ## The safety model
 
 This is the part worth understanding before pointing agents at a machine you care about.

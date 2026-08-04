@@ -172,7 +172,17 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
     # --------------------------------------------------------------- scheduler
     @bp.get("/schedule")
     def schedule():
-        return jsonify({"alive": sched.alive, "tasks": sched.tasks()})
+        return jsonify({"alive": sched.alive, "tasks": sched.tasks(),
+                        "interval_sec": sched.global_interval()})
+
+    @bp.post("/schedule/run")
+    def run_all():
+        """No task named = run every enabled one (HomeFlix's 'crawl everything now')."""
+        return jsonify(sched.run_all())
+
+    @bp.post("/schedule/interval")
+    def set_interval():
+        return jsonify(sched.set_global_interval(int(_body().get("sec", 21600))))
 
     @bp.post("/schedule/<task>")
     def update_task(task):

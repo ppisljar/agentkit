@@ -166,7 +166,18 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
     # --------------------------------------------------------------- scheduler
     @r.get("/schedule")
     def schedule() -> dict:
-        return {"alive": sched.alive, "tasks": sched.tasks()}
+        return {"alive": sched.alive, "tasks": sched.tasks(),
+                "interval_sec": sched.global_interval()}
+
+    # Declared BEFORE /schedule/{task} so "run" and "interval" are not swallowed as task names.
+    @r.post("/schedule/run")
+    def run_all() -> dict:
+        """No task named = run every enabled one."""
+        return sched.run_all()
+
+    @r.post("/schedule/interval")
+    def set_interval(sec: int = Body(21600, embed=True)) -> dict:
+        return sched.set_global_interval(sec)
 
     @r.post("/schedule/{task}")
     def update_task(task: str, body: dict = Body(...)) -> dict:

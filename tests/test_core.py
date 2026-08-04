@@ -638,3 +638,53 @@ def test_flask_transcript_of_missing_run_is_404(client):
     # Both adapters map FileNotFoundError to 400 (_guard). Debatable for a missing file, but it
     # is the shared contract — pinned here so a change to one adapter can't drift from the other.
     assert client.get('/api/kit/agent_history/healthcheck/nope.jsonl').status_code == 400
+
+
+# ---------------------------------------------------------------- run-all + global interval
+
+def test_run_all_starts_only_enabled_unpaused(kit):
+    kit.scheduler.update("scraper", enabled=1)
+    res = kit.scheduler.run_all()
+    assert res["started"] == ["scraper"], res
+    for j in jobs.recent(kit.store, limit=10):
+        _wait(kit, j["id"])
+
+
+def test_run_all_skips_disabled_and_paused(kit):
+    kit.scheduler.update("scraper", enabled=0)
+    assert kit.scheduler.run_all()["started"] == []
+    kit.scheduler.update("scraper", enabled=1, paused=1)
+    assert kit.scheduler.run_all()["started"] == []
+
+
+def test_global_interval_writes_through_to_every_adapter(kit):
+    """Not a fallback: a task with a NULL interval never reschedules, so 'inherits the global'
+    would be a silent trap."""
+    kit.scheduler.set_global_interval(900)
+    assert kit.scheduler.global_interval() == 900
+    for t in kit.scheduler.tasks():
+        if t["kind"] == "adapter":
+            assert t["interval_sec"] == 900, t
+        else:
+            assert t["interval_sec"] is None, t     # agents run by hour
+
+
+def test_global_interval_has_a_floor(kit):
+    assert kit.scheduler.set_global_interval(1)["interval_sec"] == 60
+
+
+def test_schedule_run_is_not_swallowed_as_a_task_name(client, kit):
+    """/schedule/run must hit run-all, not /schedule/<task> with task='run'."""
+    kit.scheduler.update("scraper", enabled=1)
+    r = client.post('/api/kit/schedule/run')
+    assert r.status_code == 200, r.status_code
+    d = r.get_json()
+    assert "started" in d, d          # a task update would return a task row instead
+    for j in jobs.recent(kit.store, limit=10):
+        _wait(kit, j["id"])
+
+
+def test_schedule_interval_route_and_exposure(client):
+    r = client.post('/api/kit/schedule/interval', json={"sec": 1800})
+    assert r.status_code == 200 and r.get_json()["interval_sec"] == 1800
+    assert client.get('/api/kit/schedule').get_json()["interval_sec"] == 1800

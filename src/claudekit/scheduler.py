@@ -157,6 +157,40 @@ class Scheduler:
         job_id = jobs.run_bg(self.store, kind, label, {"task": task}, _work)
         return {"ok": True, "task": task, "job": job_id}
 
+    def run_all(self) -> dict:
+        """Start every enabled, unpaused task now. Tasks already running are skipped, not queued
+        twice. Returns what was started and what was skipped, so a caller can report honestly
+        rather than implying it kicked off more than it did."""
+        started, skipped = [], []
+        for row in self.tasks():
+            if not row.get("enabled") or row.get("paused"):
+                continue
+            res = self.run_now(row["task"])
+            (started if res.get("ok") else skipped).append(row["task"])
+        return {"ok": True, "started": started, "skipped": skipped}
+
+    def global_interval(self) -> int | None:
+        row = self.store.one("SELECT v FROM ck_schedule_meta WHERE k='interval_sec'")
+        try:
+            return int(row["v"]) if row else None
+        except (TypeError, ValueError):
+            return None
+
+    def set_global_interval(self, sec: int) -> dict:
+        """Set one crawl interval across every adapter.
+
+        Deliberately a write-through rather than a fallback the way HomeFlix did it: a task whose
+        interval is NULL never reschedules here, so 'inherits the global' would be a silent trap.
+        Storing it too keeps the UI able to show what was last applied. Agents are untouched —
+        they are scheduled by hour.
+        """
+        sec = max(60, int(sec))
+        self._ensure_synced()
+        self.store.execute("UPDATE ck_schedule_task SET interval_sec=? WHERE kind='adapter'", (sec,))
+        self.store.execute("INSERT OR REPLACE INTO ck_schedule_meta (k, v) VALUES ('interval_sec', ?)",
+                           (str(sec),))
+        return {"ok": True, "interval_sec": sec}
+
     def _fire_pre_run(self, task: str):
         """Host hook run just before a task starts; its return is threaded to post_run.
 
