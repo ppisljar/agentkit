@@ -168,7 +168,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
       ) : (
         <>
           {pending.length > 0 && (
-            <Card className="mb-5" title={`Needs your input (${pending.length})`}
+            <Card className="mb-5" tone="attention" title={`Needs your input (${pending.length})`}
               subtitle="Answer a question or approve a proposal, then press “Apply approved”.">
               <div className="space-y-3">
                 {pending.map((it) => (
@@ -282,21 +282,23 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
         <button onClick={onBack} className="text-sm text-blue-600 hover:underline">← All reports</button>
       )}
 
-      <Card title={`${agentLabels?.[report.agent] || report.agent} · report #${shown}`}
-        subtitle={`${fmtAgo(report.created)} · ${report.duration_sec}s`}
-        right={<div className="flex items-center gap-2">
-          <ProjectPill project={project} />
-          <Badge tone={report.status}>{report.status}</Badge>
-        </div>}>
-        {report.summary && <p className="text-sm text-gray-700">{report.summary}</p>}
-        {project?.url && (
-          <p className="mt-2 text-xs">
-            <a href={project.url} className="text-blue-600 hover:underline">
-              open {project.label} ↗
-            </a>
-          </p>
-        )}
-      </Card>
+      {!inline && (
+        <Card title={`${agentLabels?.[report.agent] || report.agent} · report #${shown}`}
+          subtitle={`${fmtAgo(report.created)} · ${report.duration_sec}s`}
+          right={<div className="flex items-center gap-2">
+            <ProjectPill project={project} />
+            <Badge tone={report.status}>{report.status}</Badge>
+          </div>}>
+          {report.summary && <p className="text-sm text-gray-700">{report.summary}</p>}
+          {project?.url && (
+            <p className="mt-2 text-xs">
+              <a href={project.url} className="text-blue-600 hover:underline">
+                open {project.label} ↗
+              </a>
+            </p>
+          )}
+        </Card>
+      )}
 
       {(report.findings || []).length > 0 && (
         <Card title="Findings">

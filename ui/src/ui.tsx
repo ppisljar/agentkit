@@ -9,15 +9,22 @@ import React from 'react'
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
 
-export function Card({ title, subtitle, right, children, className }: {
+export function Card({ title, subtitle, right, children, className, tone }: {
   title?: React.ReactNode
   subtitle?: React.ReactNode
   right?: React.ReactNode
   children?: React.ReactNode
   className?: string
+  /** 'attention' tints the panel amber — for the one card that is asking something of the reader,
+   *  so it does not look like just another report. A tone rather than an extra className because
+   *  two competing bg-* utilities resolve by CSS source order, not by the order they are written. */
+  tone?: 'attention'
 }) {
+  const surface = tone === 'attention'
+    ? 'border-amber-400/40 bg-amber-400/10'
+    : 'border-gray-200 bg-white'
   return (
-    <div className={cx('rounded-xl border border-gray-200 bg-white shadow-sm', className)}>
+    <div className={cx('rounded-xl border shadow-sm', surface, className)}>
       {(title || right) && (
         <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-4 py-3">
           <div className="min-w-0">
