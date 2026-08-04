@@ -23,6 +23,7 @@ edited files says so.
 from __future__ import annotations
 
 import json
+import re
 
 from . import agent_run, jobs, registry, reports
 from .store import Store
@@ -48,6 +49,30 @@ def report_as_text(rep: dict) -> str:
     if detail:
         lines += ["", "FULL REPORT:", detail]
     return "\n".join(lines)
+
+
+_TRAILING_JSON = re.compile(r"\n*```json\s*(\{.*?\})\s*```\s*$", re.S)
+
+
+def strip_report_block(text: str) -> str:
+    """Drop the trailing ```json report block from a conversational reply.
+
+    Scheduled agents are required to end every run with one fenced json block, and they keep doing
+    it when answering a question — so a two-paragraph answer arrived with a wall of escaped JSON
+    stapled to the end, rendered verbatim in the thread. That block is the REPORT contract; in a
+    conversation it is noise, and the same content is already in the prose above it.
+
+    Only a block at the very END is removed, and only if it actually parses — so an answer that
+    deliberately shows you some JSON keeps it.
+    """
+    m = _TRAILING_JSON.search(text or "")
+    if not m:
+        return text
+    try:
+        json.loads(m.group(1))
+    except Exception:  # noqa: BLE001 — not a report block, leave the reply alone
+        return text
+    return (text[:m.start()]).rstrip() or text
 
 
 def build_prompt(rep: dict, question: str, *, resuming: bool) -> str:
@@ -95,7 +120,8 @@ def ask(cfg, store: Store, report_id: int, question: str, *, agent: str | None =
         try:
             res = agent_run.run(cfg, spec, prompt=prompt, resume=sid)
             ok = res["returncode"] == 0
-            reports.finish_message(store, msg_id, res["result"] or "(no output)",
+            reports.finish_message(store, msg_id,
+                                   strip_report_block(res["result"]) or "(no output)",
                                    session=res["session"], status="done" if ok else "error")
             jobs.update(store, job_id, status="done" if ok else "error",
                         result={"message": msg_id, "session": res["session"]},

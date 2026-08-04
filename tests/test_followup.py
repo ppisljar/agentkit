@@ -161,6 +161,35 @@ def test_a_running_followup_shows_the_agent_as_busy(kit, monkeypatch):  # noqa: 
     assert after["healthcheck"] is False                    # and idle once it finishes
 
 
+def test_report_block_is_stripped_from_the_reply(kit, monkeypatch):  # noqa: F811
+    """Agents must end every run with a fenced json report block, and they keep doing it when
+    merely answering a question — so the thread showed a wall of escaped JSON under the prose."""
+    def _reply(cfg, spec, prompt=None, timeout=None, resume=None):
+        return {"stdout": "", "returncode": 0, "session": "s", "transcript": None,
+                "duration_sec": 1,
+                "result": 'Because the fetch was ratio-locked.\n\n'
+                          '```json\n{"status":"warn","summary":"x","findings":[]}\n```'}
+
+    monkeypatch.setattr(agent_run, "run", _reply)
+    rid = _report(kit)
+    row = _settle(kit, followup.ask(kit.cfg, kit.store, rid, "why?")["message_id"])
+    assert row["text"] == "Because the fetch was ratio-locked."
+
+
+def test_a_deliberate_json_answer_is_kept(kit, monkeypatch):  # noqa: F811
+    """Only a trailing block that PARSES is dropped — an answer that shows you JSON on purpose,
+    or explains some, must survive."""
+    def _reply(cfg, spec, prompt=None, timeout=None, resume=None):
+        return {"stdout": "", "returncode": 0, "session": "s", "transcript": None,
+                "duration_sec": 1,
+                "result": 'Here is the shape:\n\n```json\n{"a": 1}\n```\n\nand that is why.'}
+
+    monkeypatch.setattr(agent_run, "run", _reply)
+    rid = _report(kit)
+    row = _settle(kit, followup.ask(kit.cfg, kit.store, rid, "shape?")["message_id"])
+    assert "```json" in row["text"] and "and that is why." in row["text"]
+
+
 def test_bad_input_is_rejected(kit, fake_run):  # noqa: F811
     rid = _report(kit)
     assert followup.ask(kit.cfg, kit.store, 9999, "q")["ok"] is False
