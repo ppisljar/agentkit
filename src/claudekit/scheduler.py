@@ -17,12 +17,15 @@ restart should run this module in its own process.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
 from . import agent_run, jobs, registry, reports
 from .config import KitConfig
 from .store import Store
+
+log = logging.getLogger("claudekit.scheduler")
 
 DEFAULT_INTERVAL = 6 * 3600
 # Short tick: it is two cheap SQLite reads, and it bounds how long a "Run now" from the web
@@ -166,6 +169,25 @@ class Scheduler:
             """UPDATE ck_schedule_task SET last_run=?, last_duration_sec=?, last_status=?,
                       last_result=?, last_error=?, next_run=? WHERE task=?""",
             (started, int(_now() - started), status, result[:4000], error, nxt, task))
+        self._fire_post_run(task, status, result, error, started)
+
+    def _fire_post_run(self, task: str, status: str, result: str,
+                       error: str | None, started: float) -> None:
+        """Notify the host that a task finished, so it can trigger follow-up work (rebuild a static
+        site after a scrape that found new items, reindex a catalog, …).
+
+        Called from _finish, so it fires exactly once for every task type — adapter, agent and
+        agent-script alike. A hook that raises is logged and swallowed: follow-up work failing must
+        not mark the task itself as failed, or retroactively undo a scrape that genuinely worked.
+        """
+        hook = getattr(self.cfg, "post_run", None)
+        if not callable(hook):
+            return
+        try:
+            hook(task, status, {"result": result, "error": error, "started": started,
+                                "duration_sec": int(_now() - started)})
+        except Exception as e:  # noqa: BLE001 — a broken hook must not break the scheduler
+            log.warning("post_run hook failed for %s: %s: %s", task, type(e).__name__, e)
 
     def _run_adapter(self, task: str, job_id: int) -> None:
         argv = list(self.cfg.adapters.get(task) or [])
@@ -186,9 +208,27 @@ class Scheduler:
         self._finish(task, "ok" if rc == 0 else "error", started,
                      error=None if rc == 0 else f"exit {rc}")
 
+    def _run_agent_script(self, task: str, spec, job_id: int) -> None:
+        """Run a host script that owns the whole agent run.
+
+        Used when the run needs domain work around the model call — assembling prompt context from
+        live data first, or deriving a factual report from the database afterwards (rather than
+        trusting the model to describe what it did). The script calls agent_run.run() itself and
+        writes its own report, so the kit only supervises the process.
+        """
+        argv = [self.cfg.python_bin, *spec.script] if isinstance(spec.script, (list, tuple)) \
+            else [self.cfg.python_bin, spec.script]
+        started = _now()
+        rc = jobs.run_subprocess(self.store, job_id, argv, cwd=str(self.cfg.root),
+                                 env=self.cfg.env())
+        self._finish(task, "ok" if rc == 0 else "error", started,
+                     error=None if rc == 0 else f"exit {rc}")
+
     def _run_agent(self, task: str, job_id: int) -> None:
         started = _now()
         spec = registry.resolve(self.cfg, self.store, task)
+        if spec.script:
+            return self._run_agent_script(task, spec, job_id)
         try:
             res = agent_run.run(self.cfg, spec)
         except agent_run.AgentError as e:

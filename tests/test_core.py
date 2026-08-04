@@ -284,3 +284,131 @@ def test_both_http_adapters_build_and_agree(kit):
         f"only in fastapi: {norm(fastapi_paths) - norm(flask_paths)}\n"
         f"only in flask:   {norm(flask_paths) - norm(fastapi_paths)}")
     assert len(fastapi_paths) > 15
+
+
+# ---------------------------------------------------------------- shared system hints
+
+def test_system_hints_appended_and_idempotent(kit):
+    kit.cfg.system_hints = (" HINT-A", " HINT-B")
+    s = registry.resolve(kit.cfg, kit.store, "healthcheck")
+    assert s.system == "sys HINT-A HINT-B"
+    # resolving twice must not double-append
+    assert registry.resolve(kit.cfg, kit.store, "healthcheck").system == s.system
+
+
+def test_system_hints_survive_a_user_prompt_override(kit):
+    """The point of appending at resolve time: editing a prompt in the UI must not drop a
+    host-wide rule."""
+    kit.cfg.system_hints = (" HINT-A",)
+    registry.set_prompt(kit.store, "healthcheck", "my own system prompt", None)
+    assert registry.resolve(kit.cfg, kit.store, "healthcheck").system == "my own system prompt HINT-A"
+
+
+def test_no_hints_agent_is_exempt(kit):
+    kit.cfg.system_hints = (" HINT-A",)
+    kit.cfg.agents["chat"] = AgentSpec(name="chat", label="Chat", description="d",
+                                       system="sys", prompt="p", no_hints=True)
+    assert registry.resolve(kit.cfg, kit.store, "chat").system == "sys"
+
+
+def test_hint_already_present_is_not_duplicated(kit):
+    kit.cfg.system_hints = (" HINT-A",)
+    kit.cfg.agents["baked"] = AgentSpec(name="baked", label="B", description="d",
+                                        system="sys HINT-A", prompt="p")
+    assert registry.resolve(kit.cfg, kit.store, "baked").system == "sys HINT-A"
+
+
+# ---------------------------------------------------------------- claude binary resolution
+
+def test_claude_bin_found_outside_path(kit, tmp_path, monkeypatch):
+    """A systemd unit pins a PATH that omits ~/.local/bin; the CLI must still be found."""
+    fake_home = tmp_path / "home"
+    (fake_home / ".local" / "bin").mkdir(parents=True)
+    exe = fake_home / ".local" / "bin" / "claude"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.setenv("HOME", str(fake_home))
+    assert kit.cfg.resolve_claude_bin() == str(exe)
+    assert kit.cfg.claude_available()
+
+
+def test_claude_bin_missing_reports_unavailable(kit, monkeypatch, tmp_path):
+    monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.setenv("HOME", str(tmp_path / "empty-home"))
+    assert kit.cfg.resolve_claude_bin() is None
+    assert not kit.cfg.claude_available()
+
+
+def test_stall_tools_denied_by_default(kit):
+    """An agent run is one `claude -p` turn — waiting for a callback strands the work."""
+    for t in ("ScheduleWakeup", "Monitor", "CronCreate"):
+        assert t in kit.cfg.deny_tools
+
+
+# ---------------------------------------------------------------- agent scripts + post-run hook
+
+def _wait(kit, job_id, want="done"):
+    import time
+    for _ in range(300):
+        j = jobs.get(kit.store, job_id)
+        if j["status"] != "running":
+            return j
+        time.sleep(0.02)
+    return jobs.get(kit.store, job_id)
+
+
+def test_agent_with_script_runs_the_script_not_the_model(kit, tmp_path):
+    """AgentSpec.script owns the whole run — the kit must not also call Claude."""
+    script = kit.cfg.root / "wrapper.py"
+    script.write_text("print('wrapper ran')\n", encoding="utf-8")
+    kit.cfg.agents["scripted"] = AgentSpec(
+        name="scripted", label="Scripted", description="d", system="s", prompt="p",
+        schedule="daily", script=["wrapper.py"])
+    kit.scheduler.sync_tasks()
+    res = kit.scheduler.run_now("scripted")
+    j = _wait(kit, res["job"])
+    assert j["status"] == "done", j
+    assert "wrapper ran" in (j["log"] or "")
+    assert kit.scheduler.get("scripted")["last_status"] == "ok"
+
+
+def test_agent_script_failure_is_reported(kit):
+    script = kit.cfg.root / "boom.py"
+    script.write_text("import sys; sys.exit(3)\n", encoding="utf-8")
+    kit.cfg.agents["boom"] = AgentSpec(name="boom", label="Boom", description="d",
+                                       system="s", prompt="p", schedule="daily",
+                                       script=["boom.py"])
+    kit.scheduler.sync_tasks()
+    j = _wait(kit, kit.scheduler.run_now("boom")["job"])
+    assert j["status"] == "error", j
+    assert kit.scheduler.get("boom")["last_status"] == "error"
+
+
+def test_post_run_hook_fires_for_adapter(kit):
+    seen = []
+    kit.cfg.post_run = lambda task, status, info: seen.append((task, status, info))
+    _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert seen and seen[0][0] == "scraper" and seen[0][1] == "ok", seen
+    assert "duration_sec" in seen[0][2]
+
+
+def test_post_run_hook_fires_for_agent_script(kit):
+    seen = []
+    kit.cfg.post_run = lambda task, status, info: seen.append((task, status))
+    (kit.cfg.root / "w.py").write_text("print('x')\n", encoding="utf-8")
+    kit.cfg.agents["scripted2"] = AgentSpec(name="scripted2", label="S", description="d",
+                                            system="s", prompt="p", schedule="daily",
+                                            script=["w.py"])
+    kit.scheduler.sync_tasks()
+    _wait(kit, kit.scheduler.run_now("scripted2")["job"])
+    assert ("scripted2", "ok") in seen, seen
+
+
+def test_broken_post_run_hook_does_not_fail_the_task(kit):
+    def boom(task, status, info):
+        raise RuntimeError("hook exploded")
+    kit.cfg.post_run = boom
+    j = _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert j["status"] == "done", j
+    assert kit.scheduler.get("scraper")["last_status"] == "ok"

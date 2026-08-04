@@ -55,13 +55,14 @@ def run(cfg: KitConfig, spec: AgentSpec, prompt: str | None = None,
         timeout: int | None = None) -> dict:
     """Run one agent to completion. Returns
     {stdout, returncode, session, transcript, duration_sec, result}."""
-    if not cfg.claude_available():
+    claude = cfg.resolve_claude_bin()
+    if not claude:
         raise AgentError(
             f"`{cfg.claude_bin}` not found on PATH — install Claude Code or set KitConfig.claude_bin")
 
     sid = str(uuid.uuid4())
     cmd = [
-        cfg.claude_bin, "-p",
+        claude, "-p",
         "--model", spec.model,
         "--output-format", "json",
         "--session-id", sid,

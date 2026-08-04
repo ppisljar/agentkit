@@ -66,6 +66,45 @@ import { KitReports } from '@claudekit/KitReports'
 Alias `@claudekit` to `claudeKit/ui/src` in your bundler, and add that path to your Tailwind
 `content` globs or the classes get purged.
 
+## Agents that need code around the model call
+
+Some runs can't be "send a prompt, parse the JSON". They need to assemble prompt context from live
+data first, or derive a **factual** report from the database afterwards rather than trusting the
+model to describe what it did. Give such an agent a `script`:
+
+```python
+AgentSpec(name="sldubs", ..., schedule="daily", script=["scripts/sl_dubs_agent.py"])
+```
+
+The scheduler then runs `python_bin script...` from the app root and supervises the process (its
+output is streamed into the job log); the script calls `claudekit.agent_run.run()` itself and writes
+its own report. Without `script`, the agent is called directly and its JSON block becomes the report.
+
+## Follow-up work: `post_run`
+
+```python
+def after(task, status, info):
+    if task == "scraper" and status == "ok":
+        rebuild_site()
+
+KitConfig(..., post_run=after)
+```
+
+Fires once for every finished task — adapter, agent and agent-script alike. A hook that raises is
+logged and swallowed: follow-up work failing must not retroactively mark a scrape that worked as
+failed.
+
+## Host-wide prompt rules: `system_hints`
+
+```python
+KitConfig(..., system_hints=(ONESHOT_HINT, DOCS_HINT))
+```
+
+Appended to every agent's system prompt at resolve time, so the rule also reaches prompts a user has
+edited in the UI — baking hints into each `AgentSpec` means customising one agent silently drops
+them. Appending is idempotent, and an agent can opt out with `AgentSpec(no_hints=True)` (a
+conversational agent shouldn't be told nobody will ever reply to it).
+
 ## The safety model
 
 This is the part worth understanding before pointing agents at a machine you care about.
@@ -77,7 +116,10 @@ This is the part worth understanding before pointing agents at a machine you car
 
 So an agent never acts on its own conclusions. `KitConfig.deny_tools` additionally denies
 destructive tools at the CLI level (`rm`, `git push`, `kill`, `pkill`, `systemctl`, `sudo`,
-`shutdown`, `reboot`).
+`shutdown`, `reboot`) plus the *wait-for-a-callback* tools (`ScheduleWakeup`, `Monitor`,
+`CronCreate`). The latter aren't destructive — they're structural: a run is a single `claude -p`
+turn with nobody to notify it, so an agent that schedules a wakeup ends its turn and dies with the
+work unfinished. Denying them turns a silent stall into a recoverable tool error.
 
 Agents still run with `--dangerously-skip-permissions`, because they run unattended. Treat the
 denylist as a backstop, not a sandbox: an agent can still write files inside the app root. Point

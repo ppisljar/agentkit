@@ -31,9 +31,16 @@ class AgentSpec:
     prompt: str
     schedule: str = "on demand"
     model: str = "sonnet"
-    script: str | None = None
+    # A host script (argv, relative to root) run INSTEAD of calling the agent directly. Use this
+    # when the run needs domain work around the model call — building prompt context from live
+    # data beforehand, or deriving a factual report from the database afterwards. The script owns
+    # the whole run: it typically calls claudekit.agent_run.run() itself and writes its own report.
+    script: list[str] | str | None = None
     # Extra directories the agent may read (beyond the app root).
     add_dirs: tuple[str, ...] = ()
+    # Skip the shared KitConfig.system_hints for this agent (e.g. a conversational agent that a
+    # human really does reply to, for which a "you get one turn" hint would be wrong).
+    no_hints: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,10 +90,23 @@ class KitConfig:
     # Scrapers/crawlers the scheduler can run: key -> argv template (relative to root).
     adapters: dict[str, list[str]] = field(default_factory=dict)
     # Tools denied to every agent. Agents run unattended, so this is deliberately restrictive.
+    # The second line is about TURN STRUCTURE rather than destruction: an agent run is a single
+    # `claude -p` turn with nobody to notify it, so an agent that schedules a wakeup or waits on a
+    # monitor simply ends its turn and dies with the work unfinished. Denying them turns a silent
+    # stall into an immediate tool error the agent can recover from.
     deny_tools: tuple[str, ...] = (
         "Bash(rm:*)", "Bash(git push:*)", "Bash(kill:*)", "Bash(pkill:*)",
         "Bash(shutdown:*)", "Bash(reboot:*)", "Bash(systemctl:*)", "Bash(sudo:*)",
+        "ScheduleWakeup", "Monitor", "CronCreate",
     )
+    # Text appended to EVERY agent's system prompt (unless AgentSpec.no_hints). Appended at resolve
+    # time rather than baked into each spec, so it also reaches prompts the user has customised in
+    # the UI — a host-wide rule shouldn't be lost the moment someone edits one agent's prompt.
+    system_hints: tuple[str, ...] = ()
+    # Called after a scheduler task finishes: fn(task, status, result_dict). Lets a host trigger
+    # follow-up work — e.g. rebuild a static site when a scrape actually produced new items.
+    # Exceptions are logged and swallowed; a failing hook must not fail the task.
+    post_run: object | None = None
     agent_timeout_sec: int = 2700
     keep_transcripts: int = 60
 
@@ -109,8 +129,26 @@ class KitConfig:
             raise ValueError(f"path escapes app root: {relpath}")
         return p
 
+    # Where `claude` commonly installs. Searched only when it isn't on PATH: a scheduler daemon
+    # usually runs under systemd with an explicitly pinned PATH that omits ~/.local/bin, so an
+    # agent would report "CLI not found" while the CLI was installed and logged in.
+    _CLAUDE_DIRS = ("~/.local/bin", "~/.claude/local", "/usr/local/bin", "/opt/homebrew/bin")
+
+    def resolve_claude_bin(self) -> str | None:
+        """Absolute path to the Claude Code CLI, or None if it genuinely isn't installed."""
+        if os.path.isabs(self.claude_bin):
+            return self.claude_bin if os.access(self.claude_bin, os.X_OK) else None
+        found = shutil.which(self.claude_bin)
+        if found:
+            return found
+        for d in self._CLAUDE_DIRS:
+            p = os.path.join(os.path.expanduser(d), self.claude_bin)
+            if os.access(p, os.X_OK):
+                return p
+        return None
+
     def claude_available(self) -> bool:
-        return shutil.which(self.claude_bin) is not None
+        return self.resolve_claude_bin() is not None
 
     def env(self) -> dict:
         e = dict(os.environ)
