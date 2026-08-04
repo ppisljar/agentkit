@@ -125,6 +125,55 @@ export function Empty({ children }: { children: React.ReactNode }) {
 }
 
 /** Monospace log/output box that keeps its scroll pinned to the bottom while content streams. */
+/**
+ * Agent prose, rendered.
+ *
+ * Agents answer in Markdown, and printing it verbatim shows "## Summary" and "**built**" as
+ * literal characters. This covers what they actually emit — headings, bold, inline code, fenced
+ * blocks — and lets anything else fall through as plain text, which is the right failure for a
+ * construct we don't handle. Built as React nodes rather than innerHTML: this is model output and
+ * must never be interpreted as markup.
+ */
+export function Markdown({ text, className }: { text?: string | null; className?: string }) {
+  const out: React.ReactNode[] = []
+  const blocks = (text || '').split(/```/)
+  blocks.forEach((chunk, bi) => {
+    if (bi % 2 === 1) {
+      out.push(
+        <pre key={`f${bi}`} className="my-2 overflow-auto rounded-md bg-gray-100 p-2 text-xs">
+          {chunk.replace(/^[a-zA-Z]*\n/, '').trim()}
+        </pre>)
+      return
+    }
+    chunk.split('\n').forEach((line, li) => {
+      const k = `${bi}-${li}`
+      const h = /^(#{1,4})\s+(.*)$/.exec(line)
+      if (h) out.push(<div key={k} className="mt-2 font-semibold">{mdInline(h[2], k)}</div>)
+      else if (!line.trim()) out.push(<div key={k} className="h-2" />)
+      else out.push(<div key={k}>{mdInline(line, k)}</div>)
+    })
+  })
+  return <div className={cx('text-sm leading-relaxed', className)}>{out}</div>
+}
+
+// **bold** and `code`, in one pass so neither can swallow the other.
+function mdInline(s: string, key: string): React.ReactNode[] {
+  const parts: React.ReactNode[] = []
+  const re = /\*\*(.+?)\*\*|`([^`]+)`/g
+  let last = 0, i = 0
+  let m: RegExpExecArray | null
+  while ((m = re.exec(s))) {
+    if (m.index > last) parts.push(s.slice(last, m.index))
+    parts.push(m[1]
+      ? <strong key={`${key}b${i}`}>{m[1]}</strong>
+      : <code key={`${key}c${i}`} className="rounded bg-gray-100 px-1 text-xs">{m[2]}</code>)
+    last = m.index + m[0].length
+    i++
+  }
+  if (last < s.length) parts.push(s.slice(last))
+  return parts
+}
+
 export function LogBox({ text, className }: { text?: string | null; className?: string }) {
   const ref = React.useRef<HTMLPreElement>(null)
   const pinned = React.useRef(true)

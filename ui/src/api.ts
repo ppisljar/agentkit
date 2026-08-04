@@ -95,6 +95,8 @@ export type ThreadMessage = {
   session?: string
   job_id?: number
   status?: 'running' | 'done' | 'error'
+  /** the reply's json block, parsed — same shape as a report's own findings */
+  findings?: Finding[]
 }
 export type AskResult = { ok: boolean; message_id?: number; job?: number; agent?: string; resumed?: boolean; error?: string }
 

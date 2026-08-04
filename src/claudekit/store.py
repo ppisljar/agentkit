@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS ck_report_messages (
   session TEXT,                     -- the run's session id, so the NEXT follow-up can resume it
   job_id INTEGER,                   -- ck_jobs row while it runs, so the UI can poll and show a log
   status TEXT DEFAULT 'done',       -- running | done | error
+  findings TEXT,                    -- the reply's json block, parsed: same shape as ck_reports
   FOREIGN KEY (report_id) REFERENCES ck_reports(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS ix_ck_msgs_report ON ck_report_messages(report_id, id);
@@ -88,6 +89,7 @@ _ADDED_COLUMNS = {
     # follow-up: the session id used to survive only in ck_jobs.result for kit-run agents, and not
     # at all for wrapper-script agents, so there was nothing to resume from.
     "ck_reports": {"session": "TEXT"},
+    "ck_report_messages": {"findings": "TEXT"},
 }
 
 

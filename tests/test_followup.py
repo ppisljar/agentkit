@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import pytest
@@ -161,19 +162,30 @@ def test_a_running_followup_shows_the_agent_as_busy(kit, monkeypatch):  # noqa: 
     assert after["healthcheck"] is False                    # and idle once it finishes
 
 
-def test_report_block_is_stripped_from_the_reply(kit, monkeypatch):  # noqa: F811
-    """Agents must end every run with a fenced json report block, and they keep doing it when
-    merely answering a question — so the thread showed a wall of escaped JSON under the prose."""
+def test_reply_block_is_parsed_not_discarded(kit, monkeypatch):  # noqa: F811
+    """The reply's json block is a real report payload, not noise: its questions and proposals
+    must reach the same answer/approve loop as a scheduled run's, and its findings must survive.
+    Dropping it silently loses a question the agent asked you."""
     def _reply(cfg, spec, prompt=None, timeout=None, resume=None):
         return {"stdout": "", "returncode": 0, "session": "s", "transcript": None,
                 "duration_sec": 1,
                 "result": 'Because the fetch was ratio-locked.\n\n'
-                          '```json\n{"status":"warn","summary":"x","findings":[]}\n```'}
+                          '```json\n{"status":"warn","summary":"x",'
+                          '"findings":[{"area":"downloads","title":"locked"}],'
+                          '"questions":["contact the tracker?"],'
+                          '"proposals":["drop sihq"]}\n```'}
 
     monkeypatch.setattr(agent_run, "run", _reply)
     rid = _report(kit)
     row = _settle(kit, followup.ask(kit.cfg, kit.store, rid, "why?")["message_id"])
-    assert row["text"] == "Because the fetch was ratio-locked."
+
+    assert row["text"] == "Because the fetch was ratio-locked."     # raw fence out of the prose
+    assert json.loads(row["findings"])[0]["title"] == "locked"      # findings kept on the message
+    # and the question/proposal are answerable items on the report, like any other
+    items = {i["kind"]: i for i in kit.store.query(
+        "SELECT * FROM ck_report_items WHERE report_id=? AND status='open'", (rid,))}
+    assert items["question"]["text"] == "contact the tracker?"
+    assert items["proposal"]["text"] == "drop sihq"
 
 
 def test_a_deliberate_json_answer_is_kept(kit, monkeypatch):  # noqa: F811

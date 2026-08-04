@@ -12,8 +12,8 @@
  */
 
 import React from 'react'
-import { ApplyResult, Job, KitApi, Report, ReportItem, RowId, ThreadMessage, fmtAgo } from './api'
-import { Badge, Button, Card, Empty, ErrorNote, LogBox, Spinner, cx } from './ui'
+import { ApplyResult, Finding, Job, KitApi, Report, ReportItem, RowId, ThreadMessage, fmtAgo } from './api'
+import { Badge, Button, Card, Empty, ErrorNote, LogBox, Markdown, Spinner, cx } from './ui'
 
 /** A project the reports may belong to. `key` is what the API filters on. */
 export type ProjectTag = { key: string; label: string; color?: string; url?: string }
@@ -181,6 +181,15 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
   )
 }
 
+/** A finding as one line, for the compact list under a follow-up reply. The full card treatment
+ *  is reserved for a report's own findings, above. */
+function findingText(f: Finding | string): string {
+  if (typeof f === 'string') return f
+  const head = [f.severity && `[${f.severity}]`, f.area && `${f.area}:`, f.title]
+    .filter(Boolean).join(' ')
+  return [head, f.detail].filter(Boolean).join(' — ')
+}
+
 function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project }: {
   api: KitApi; report: Report; onBack: () => void; onChanged: () => void
   onError: (e: string) => void
@@ -328,7 +337,13 @@ function FollowUp({ api, report, project, onError, agentLabels }: {
               </div>
               {m.status === 'running'
                 ? <span className="text-gray-500"><Spinner /> thinking…</span>
-                : m.text}
+                : <Markdown text={m.text} />}
+              {/* the reply's json block, parsed: findings render like a report's own */}
+              {(m.findings || []).length > 0 && (
+                <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-gray-600">
+                  {(m.findings || []).map((f, i) => <li key={i}>{findingText(f)}</li>)}
+                </ul>
+              )}
             </div>
           ))}
         </div>

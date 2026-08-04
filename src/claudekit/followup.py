@@ -54,25 +54,28 @@ def report_as_text(rep: dict) -> str:
 _TRAILING_JSON = re.compile(r"\n*```json\s*(\{.*?\})\s*```\s*$", re.S)
 
 
-def strip_report_block(text: str) -> str:
-    """Drop the trailing ```json report block from a conversational reply.
+def split_report_block(text: str) -> tuple[str, dict | None]:
+    """(prose, parsed report block) from a reply that ends with a fenced ```json block.
 
-    Scheduled agents are required to end every run with one fenced json block, and they keep doing
-    it when answering a question — so a two-paragraph answer arrived with a wall of escaped JSON
-    stapled to the end, rendered verbatim in the thread. That block is the REPORT contract; in a
-    conversation it is noise, and the same content is already in the prose above it.
+    Agents end every run with that block, including when they are answering a question — and it is
+    NOT noise. It carries the same payload a scheduled run's does: findings, and questions and
+    proposals the agent wants decided. Those have to reach the same answer/approve loop as any
+    other, so the block is PARSED and its items raised; only the raw fence is taken out of the
+    prose, because the UI renders the parsed form instead.
 
-    Only a block at the very END is removed, and only if it actually parses — so an answer that
-    deliberately shows you some JSON keeps it.
+    Only a block at the very END is taken, and only if it parses — so an answer that deliberately
+    shows you some JSON keeps it inline.
     """
     m = _TRAILING_JSON.search(text or "")
     if not m:
-        return text
+        return text, None
     try:
-        json.loads(m.group(1))
+        payload = json.loads(m.group(1))
     except Exception:  # noqa: BLE001 — not a report block, leave the reply alone
-        return text
-    return (text[:m.start()]).rstrip() or text
+        return text, None
+    if not isinstance(payload, dict):
+        return text, None
+    return ((text[:m.start()]).rstrip() or text), payload
 
 
 def build_prompt(rep: dict, question: str, *, resuming: bool) -> str:
@@ -120,11 +123,15 @@ def ask(cfg, store: Store, report_id: int, question: str, *, agent: str | None =
         try:
             res = agent_run.run(cfg, spec, prompt=prompt, resume=sid)
             ok = res["returncode"] == 0
-            reports.finish_message(store, msg_id,
-                                   strip_report_block(res["result"]) or "(no output)",
-                                   session=res["session"], status="done" if ok else "error")
+            prose, payload = split_report_block(res["result"])
+            # The reply's json block is a real report payload: raise its questions and proposals as
+            # open items on this report, so they reach the same answer/approve loop as any other.
+            raised = reports.add_items(store, report_id, payload)
+            reports.finish_message(store, msg_id, prose or "(no output)",
+                                   session=res["session"], status="done" if ok else "error",
+                                   findings=(payload or {}).get("findings"))
             jobs.update(store, job_id, status="done" if ok else "error",
-                        result={"message": msg_id, "session": res["session"]},
+                        result={"message": msg_id, "session": res["session"], "items": raised},
                         log=(res["result"] or "")[-20000:])
         except Exception as e:  # noqa: BLE001 — the thread must show the failure, not hang on 'running'
             reports.finish_message(store, msg_id, f"Follow-up failed: {e}", status="error")

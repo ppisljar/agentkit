@@ -53,16 +53,30 @@ def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
     )
     rid = int(cur.lastrowid)
 
+    add_items(store, rid, payload)
+    return rid
+
+
+def add_items(store: Store, rid: int, payload: dict | None) -> int:
+    """Turn a payload's questions/proposals into open items on report `rid`. Returns how many.
+
+    Shared with the follow-up path: an agent answering a question still ends with its json block,
+    and that block can raise NEW questions and proposals. Those are as real as the ones a scheduled
+    run raises and must reach the same answer/approve loop — dropping them would silently lose a
+    question the agent asked you.
+    """
     now = time.time()
+    n = 0
     for kind, key in (("question", "questions"), ("proposal", "proposals")):
-        for entry in (payload.get(key) or []):
+        for entry in ((payload or {}).get(key) or []):
             text = entry if isinstance(entry, str) else json.dumps(entry)
             if text and text.strip():
                 store.execute(
                     """INSERT INTO ck_report_items (report_id, created, kind, text, status)
                        VALUES (?,?,?,?,'open')""",
                     (rid, now, kind, text.strip()))
-    return rid
+                n += 1
+    return n
 
 
 def _report_row(r) -> dict:
@@ -165,12 +179,13 @@ def add_message(store: Store, report_id: int, role: str, text: str, *, agent: st
 
 
 def finish_message(store: Store, msg_id: int, text: str, *, session: str | None = None,
-                   status: str = "done") -> None:
+                   status: str = "done", findings: list | None = None) -> None:
     """Fill in an agent reply once its run returns (it is inserted 'running' so the thread shows
     the question immediately rather than swallowing it for the minutes the agent takes)."""
     store.execute(
-        "UPDATE ck_report_messages SET text=?, session=COALESCE(?, session), status=? WHERE id=?",
-        (text, session, status, int(msg_id)))
+        "UPDATE ck_report_messages SET text=?, session=COALESCE(?, session), status=?, "
+        "findings=? WHERE id=?",
+        (text, session, status, json.dumps(findings) if findings else None, int(msg_id)))
 
 
 def last_session(store: Store, report_id: int) -> str | None:
