@@ -84,6 +84,20 @@ export type ReportItem = ProjectTagged & {
   agent?: string
 }
 
+/** One turn of the follow-up conversation on a report. */
+export type ThreadMessage = {
+  id: number
+  report_id: number
+  created: number
+  role: 'user' | 'agent'
+  text: string
+  agent?: string
+  session?: string
+  job_id?: number
+  status?: 'running' | 'done' | 'error'
+}
+export type AskResult = { ok: boolean; message_id?: number; job?: number; agent?: string; resumed?: boolean; error?: string }
+
 export type Report = ProjectTagged & {
   id: RowId
   created: number
@@ -152,8 +166,8 @@ export const MASK = '••••••••'
 export class KitApi {
   constructor(private base = '/api/kit') {}
 
-  private async req<T>(path: string, init?: RequestInit): Promise<T> {
-    const res = await fetch(this.base + path, {
+  private async req<T>(path: string, init?: RequestInit, base?: string): Promise<T> {
+    const res = await fetch((base ?? this.base) + path, {
       ...init,
       headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
     })
@@ -170,11 +184,22 @@ export class KitApi {
     return res.status === 204 ? (undefined as T) : ((await res.json()) as T)
   }
 
-  private post<T>(path: string, body?: any) {
-    return this.req<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
+  private post<T>(path: string, body?: any, base?: string) {
+    return this.req<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined }, base)
   }
 
   health = () => this.req<any>('/health')
+
+  // follow-up conversation on a report
+  //
+  // Deliberately takes an explicit base: against a FLEET api these must go to the owning
+  // project's own /api/kit, because only that project can run its own agents — the fleet has the
+  // databases but not the configs, roots or prompts. Same origin behind the reverse proxy, so
+  // this is a plain fetch rather than a server-side hop.
+  thread = (rid: RowId, base?: string) =>
+    this.req<ThreadMessage[]>(`/reports/${rid}/thread`, undefined, base)
+  ask = (rid: RowId, body: { prompt: string; agent?: string; resume?: boolean }, base?: string) =>
+    this.post<AskResult>(`/reports/${rid}/ask`, body, base)
 
   // agents
   agents = () => this.req<AgentInfo[]>('/agents')

@@ -12,7 +12,7 @@
  */
 
 import React from 'react'
-import { ApplyResult, Job, KitApi, Report, ReportItem, RowId, fmtAgo } from './api'
+import { ApplyResult, Job, KitApi, Report, ReportItem, RowId, ThreadMessage, fmtAgo } from './api'
 import { Badge, Button, Card, Empty, ErrorNote, LogBox, Spinner, cx } from './ui'
 
 /** A project the reports may belong to. `key` is what the API filters on. */
@@ -241,6 +241,9 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
         </Card>
       )}
 
+      <FollowUp api={api} report={report} project={project} onError={onError}
+        agentLabels={agentLabels} />
+
       {report.detail && (
         <Card title="Raw agent output"
           right={<Button variant="ghost" onClick={() => setShowRaw(!showRaw)}>
@@ -250,6 +253,124 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
         </Card>
       )}
     </div>
+  )
+}
+
+/**
+ * Ask the agent about its own report.
+ *
+ * Two choices the answer depends on. WHICH agent — the one that wrote the report by default,
+ * since it is the one that knows. WHETHER TO CONTINUE its session — continuing means it still
+ * remembers what it did; starting fresh sends the whole report along instead, so it is never
+ * asked about something it cannot see.
+ *
+ * In fleet mode this talks to the OWNING PROJECT's api, not the fleet's: the fleet has every
+ * project's database but none of their agents, roots or prompts, so only the project itself can
+ * run the follow-up. Same origin behind the reverse proxy, so it is a plain fetch.
+ */
+function FollowUp({ api, report, project, onError, agentLabels }: {
+  api: KitApi; report: Report; project?: ProjectTag
+  onError: (e: string) => void
+  agentLabels?: Record<string, string>
+}) {
+  const askBase = project?.url ? project.url.replace(/\/$/, '') + '/api/kit' : undefined
+  const rid = project ? (report.local_id ?? report.id) : report.id
+  const [thread, setThread] = React.useState<ThreadMessage[]>([])
+  const [text, setText] = React.useState('')
+  const [agent, setAgent] = React.useState(report.agent)
+  const [resume, setResume] = React.useState(true)
+  const [busy, setBusy] = React.useState(false)
+  const [agents, setAgents] = React.useState<string[]>([])
+
+  const load = React.useCallback(async () => {
+    try { setThread(await api.thread(rid, askBase)) } catch { /* not fatal — the form still works */ }
+  }, [api, rid, askBase])
+
+  React.useEffect(() => { load() }, [load])
+  React.useEffect(() => {
+    // Only poll while a reply is actually in flight; agents take minutes.
+    if (!thread.some((m) => m.status === 'running')) return
+    const t = setInterval(load, 3000)
+    return () => clearInterval(t)
+  }, [thread, load])
+  React.useEffect(() => {
+    new KitApi(askBase).agents().then((a) => setAgents(a.map((x: any) => x.name)))
+      .catch(() => setAgents([]))
+  }, [askBase])
+
+  const send = async () => {
+    if (!text.trim() || busy) return
+    setBusy(true)
+    try {
+      const r = await api.ask(rid, { prompt: text, agent, resume }, askBase)
+      if (!r.ok) { onError(r.error || 'follow-up failed'); return }
+      setText('')
+      await load()
+    } catch (e: any) {
+      onError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const otherAgent = agent !== report.agent
+  return (
+    <Card title="Ask the agent">
+      {thread.length > 0 && (
+        <div className="mb-3 space-y-3">
+          {thread.map((m) => (
+            <div key={m.id} className={cx('rounded-lg px-3 py-2 text-sm whitespace-pre-wrap',
+              m.role === 'user' ? 'bg-blue-50 text-gray-900' : 'bg-gray-50 text-gray-800')}>
+              <div className="mb-1 text-xs font-medium text-gray-500">
+                {m.role === 'user' ? 'You' : (agentLabels?.[m.agent || ''] || m.agent)}
+                {' · '}{fmtAgo(m.created)}
+                {m.status === 'error' && <span className="ml-2"><Badge tone="red">failed</Badge></span>}
+              </div>
+              {m.status === 'running'
+                ? <span className="text-gray-500"><Spinner /> thinking…</span>
+                : m.text}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder="Ask about this report — why something happened, or to go and fix it…"
+        rows={3}
+        className="w-full rounded-lg border border-gray-300 p-2 text-sm"
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <select value={agent} onChange={(e) => setAgent(e.target.value)}
+          className="rounded-lg border border-gray-300 px-2 py-1 text-sm">
+          {(agents.length ? agents : [report.agent]).map((a) => (
+            <option key={a} value={a}>
+              {(agentLabels?.[a] || a) + (a === report.agent ? ' (wrote this)' : '')}
+            </option>
+          ))}
+        </select>
+        <select
+          value={otherAgent ? 'new' : (resume ? 'continue' : 'new')}
+          disabled={otherAgent}
+          onChange={(e) => setResume(e.target.value === 'continue')}
+          className="rounded-lg border border-gray-300 px-2 py-1 text-sm disabled:opacity-60"
+          /* another agent can't continue this conversation: its transcript was written under a
+             different system prompt, so resuming it would read as that agent's own history */
+          title={otherAgent ? 'A different agent always starts fresh (with the report attached)'
+                            : 'Continue the run that produced this report, or start fresh'}
+        >
+          <option value="continue">Continue that session</option>
+          <option value="new">New session (report attached)</option>
+        </select>
+        <Button onClick={send} disabled={!text.trim() || busy}>
+          {busy ? 'Sending…' : 'Send'}
+        </Button>
+        <span className="text-xs text-gray-500">
+          runs with full permissions — it may change files and commit
+        </span>
+      </div>
+    </Card>
   )
 }
 
