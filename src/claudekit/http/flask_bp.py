@@ -6,6 +6,7 @@ so a frontend can talk to either without knowing which is behind it.
 
 from __future__ import annotations
 
+import contextlib
 import time
 
 from flask import Blueprint, jsonify, request
@@ -133,16 +134,38 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
         rep = reports.get(store, rid)
         return jsonify(rep) if rep else _err(404, "no such report")
 
+    def _trigger_for(it) -> str | None:
+        """Start the task that should carry out this decision, and return its name.
+
+        Recording a decision used to be the whole of it: the host's own route triggered an apply
+        run, but once the UI moved to these routes nothing did, so approvals sat untouched until
+        someone remembered the 'Apply now' button. Requested through the scheduler rather than run
+        here, because the loop usually lives in a separate daemon.
+        """
+        if not it or it.get("status") not in ("approved", "answered"):
+            return None
+        spec = cfg.agents.get(it.get("agent") or "")
+        task = (spec.decisions_task if spec and spec.decisions_task else "applydecisions")
+        try:
+            sched.request_run(task)
+            return task
+        except KeyError:            # host declares no such task — leave it for the manual button
+            return None
+
     @bp.post("/reports/item/<int:item_id>/answer")
     def answer_item(item_id):
         it = reports.answer(store, item_id, str(_body().get("answer", "")))
-        return jsonify(it) if it else _err(404, "no such item")
+        if not it:
+            return _err(404, "no such item")
+        return jsonify({**it, "applying": _trigger_for(reports.item_with_agent(store, item_id))})
 
     @bp.post("/reports/item/<int:item_id>/decide")
     def decide_item(item_id):
         b = _body()
         it = reports.decide(store, item_id, bool(b.get("approved")), str(b.get("note", "")))
-        return jsonify(it) if it else _err(404, "no such item")
+        if not it:
+            return _err(404, "no such item")
+        return jsonify({**it, "applying": _trigger_for(reports.item_with_agent(store, item_id))})
 
     @bp.post("/reports/apply")
     def apply_decisions():
@@ -150,9 +173,18 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
         if name not in cfg.agents:
             return _err(400, "host declares no 'applydecisions' agent")
         spec = registry.resolve(cfg, store, name)
-        prompt, ids = reports.build_apply_prompt(store, spec.prompt)
+        # Only the items this agent owns. Anything raised by an agent that handles its own
+        # decisions is started separately, so the generic apply agent is never handed a finding
+        # from a domain it knows nothing about.
+        routed = reports.route_decisions(cfg, store)
+        prompt, ids = reports.build_apply_prompt(store, spec.prompt, routed.get(name, []))
+        others = {t: [i["id"] for i in v] for t, v in routed.items() if t != name}
+        for task in others:
+            with contextlib.suppress(KeyError):
+                sched.request_run(task)
         if not ids:
-            return jsonify({"ok": True, "skipped": "nothing approved"})
+            return jsonify({"ok": True, "skipped": "nothing approved for this agent",
+                            "delegated": others})
 
         def _work(job_id: int, _params: dict) -> None:
             res = agent_run.run(cfg, spec, prompt=prompt)

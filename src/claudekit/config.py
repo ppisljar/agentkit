@@ -41,6 +41,12 @@ class AgentSpec:
     # Skip the shared KitConfig.system_hints for this agent (e.g. a conversational agent that a
     # human really does reply to, for which a "you get one turn" hint would be wrong).
     no_hints: bool = False
+    # Task to run when items THIS agent raised are approved/answered, instead of handing them to
+    # the generic apply agent. An agent whose findings are domain-specific (a download pipeline, a
+    # tracker) knows how to act on them; a general apply agent would have to rediscover all of it.
+    # The named task is expected to be a maintenance-only run — carry out the decisions, nothing
+    # else — so it is usually a second AgentSpec wrapping the same script with a flag.
+    decisions_task: str | None = None
 
 
 @dataclass(frozen=True)

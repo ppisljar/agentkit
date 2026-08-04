@@ -334,7 +334,14 @@ class Scheduler:
         up on its next tick.
         """
         if not self.get(task):
-            raise KeyError(f"unknown task: {task}")
+            # sync_tasks only materialises DAILY agents, deliberately — an on-demand agent has no
+            # business in the schedule listing until something runs it. But the row is also what
+            # get()/run_now()/this resolve through, so asking for an on-demand agent raised
+            # "unknown task" and the request vanished. Materialise it here instead: still
+            # enabled=0 with no hour, so it never fires on a timer, it just becomes addressable.
+            if task not in self.cfg.agents:
+                raise KeyError(f"unknown task: {task}")
+            self._ensure(task, "agent")
         self.store.execute("UPDATE ck_schedule_task SET run_requested=? WHERE task=?",
                            (_now(), task))
         return {"ok": True, "task": task, "queued": True}

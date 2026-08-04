@@ -248,6 +248,57 @@ def test_running_is_visible_from_another_process(kit):
     assert running_flag() is False
 
 
+def _raise_item(kit, agent, kind="proposal", text="do the thing"):
+    """A report from `agent` with one item, returned at its pre-decision id."""
+    rid = reports.save(kit.store, agent, {"summary": "s", f"{kind}s": [text]})
+    row = kit.store.one("SELECT id FROM ck_report_items WHERE report_id=? ORDER BY id DESC", (rid,))
+    return int(row["id"])
+
+
+def test_decisions_go_back_to_the_agent_that_raised_them(kit):
+    """A finding about a domain the generic apply agent knows nothing about must not land on it."""
+    from dataclasses import replace
+    kit.cfg.agents["dubs"] = replace(kit.cfg.agents["healthcheck"], name="dubs",
+                                     decisions_task="dubsmaint")
+
+    own = _raise_item(kit, "dubs")
+    other = _raise_item(kit, "healthcheck")
+    reports.decide(kit.store, own, True)
+    reports.decide(kit.store, other, True)
+
+    routed = reports.route_decisions(kit.cfg, kit.store)
+    assert [i["id"] for i in routed["dubsmaint"]] == [own]
+    assert [i["id"] for i in routed["applydecisions"]] == [other]
+    # and the per-agent filter agrees
+    assert [i["id"] for i in reports.actionable(kit.store, agent="dubs")] == [own]
+
+
+def test_apply_agent_is_not_handed_another_agents_items(kit):
+    """build_apply_prompt renders only the subset routed to it."""
+    from dataclasses import replace
+    kit.cfg.agents["dubs"] = replace(kit.cfg.agents["healthcheck"], name="dubs",
+                                     decisions_task="dubsmaint")
+    own = _raise_item(kit, "dubs", text="rewrite the dub resolver")
+    other = _raise_item(kit, "healthcheck", text="vacuum the database")
+    reports.decide(kit.store, own, True)
+    reports.decide(kit.store, other, True)
+
+    routed = reports.route_decisions(kit.cfg, kit.store)
+    prompt, ids = reports.build_apply_prompt(kit.store, "FOOTER", routed["applydecisions"])
+    assert ids == [other]
+    assert "vacuum the database" in prompt
+    assert "rewrite the dub resolver" not in prompt
+
+
+def test_answering_requests_a_run(client, kit):
+    """Recording a decision must also start the work — it used to just sit there."""
+    iid = _raise_item(kit, "healthcheck", kind="question", text="which one?")
+    r = client.post(f'/api/kit/reports/item/{iid}/answer', json={"answer": "the first"})
+    assert r.status_code == 200
+    assert r.get_json()["applying"] == "applydecisions"
+    assert kit.scheduler.get("applydecisions")["run_requested"] is not None
+
+
 def test_orphaned_job_stops_pinning_a_task_as_running(kit):
     """A daemon killed mid-run leaves status='running' behind forever; that must not make the task
     permanently un-runnable in the UI."""

@@ -151,11 +151,43 @@ def item(store: Store, item_id: int) -> dict | None:
     return dict(r) if r else None
 
 
-def actionable(store: Store) -> list[dict]:
-    """Approved proposals and answered questions the apply agent has not carried out yet."""
-    rows = store.query(
-        "SELECT * FROM ck_report_items WHERE status IN ('approved','answered') ORDER BY id")
-    return [dict(r) for r in rows]
+def item_with_agent(store: Store, item_id: int) -> dict | None:
+    """`item()` plus `agent` — which agent raised it, needed to route the decision back to it."""
+    r = store.one("SELECT i.*, r.agent AS agent FROM ck_report_items i "
+                  "LEFT JOIN ck_reports r ON r.id = i.report_id WHERE i.id=?", (item_id,))
+    return dict(r) if r else None
+
+
+def actionable(store: Store, agent: str | None = None) -> list[dict]:
+    """Approved proposals and answered questions nobody has carried out yet.
+
+    Each row carries `agent` — which agent RAISED it — so decisions can go back to the agent that
+    understands them rather than all landing on the generic apply agent (see route_decisions).
+    Pass `agent` to get only that one's items.
+    """
+    sql = ("SELECT i.*, r.agent AS agent FROM ck_report_items i "
+           "LEFT JOIN ck_reports r ON r.id = i.report_id "
+           "WHERE i.status IN ('approved','answered')")
+    params: tuple = ()
+    if agent is not None:
+        sql += " AND r.agent = ?"
+        params = (agent,)
+    return [dict(r) for r in store.query(sql + " ORDER BY i.id", params)]
+
+
+def route_decisions(cfg, store) -> dict[str, list[dict]]:
+    """{task -> items it should carry out} for everything currently awaiting action.
+
+    An agent that declares `decisions_task` handles its own items there; everything else falls to
+    'applydecisions'. Without this every decision went to the apply agent regardless of who raised
+    it, so a finding about a download pipeline was handed to an agent with none of that context.
+    """
+    out: dict[str, list[dict]] = {}
+    for it in actionable(store):
+        spec = cfg.agents.get(it.get("agent") or "")
+        task = (spec.decisions_task if spec and spec.decisions_task else "applydecisions")
+        out.setdefault(task, []).append(it)
+    return out
 
 
 def mark_done(store: Store, item_ids: list[int]) -> None:
@@ -163,13 +195,14 @@ def mark_done(store: Store, item_ids: list[int]) -> None:
         store.execute("UPDATE ck_report_items SET status='done' WHERE id=?", (int(i),))
 
 
-def build_apply_prompt(store: Store, footer: str) -> tuple[str, list[int]]:
+def build_apply_prompt(store: Store, footer: str, items: list[dict] | None = None) -> tuple[str, list[int]]:
     """Render the approved/answered items into a prompt for the apply agent.
 
     Returns (prompt, ids). An empty id list means there is nothing to do — callers should skip
-    running the agent entirely rather than invoking it with no work.
+    running the agent entirely rather than invoking it with no work. Pass `items` to render only
+    a routed subset (see route_decisions) instead of everything outstanding.
     """
-    pend = actionable(store)
+    pend = actionable(store) if items is None else items
     if not pend:
         return "", []
     lines = ["The owner has reviewed the latest report(s). Carry out ONLY the items below.", ""]
