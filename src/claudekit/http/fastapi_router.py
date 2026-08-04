@@ -12,7 +12,7 @@ from typing import Any
 from fastapi import APIRouter, Body, HTTPException, Query
 from fastapi.responses import JSONResponse
 
-from .. import agent_run, configfiles, jobs, registry, reports, services
+from .. import agent_run, configfiles, followup, jobs, registry, reports, services
 
 
 def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
@@ -121,6 +121,20 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
         if not rep:
             raise HTTPException(404, "no such report")
         return rep
+
+    @r.get("/reports/{rid}/thread")
+    def report_thread(rid: int) -> list:
+        return reports.thread(store, rid)
+
+    @r.post("/reports/{rid}/ask")
+    def report_ask(rid: int, body: dict = Body(...)) -> dict:
+        """Ask an agent about this report. Body: {prompt, agent?, resume?}."""
+        res = followup.ask(cfg, store, rid, str(body.get("prompt", "")),
+                           agent=body.get("agent") or None,
+                           resume=body.get("resume", True) is not False)
+        if not res.get("ok"):
+            raise HTTPException(400, res.get("error", "failed"))
+        return res
 
     @r.post("/reports/item/{item_id}/answer")
     def answer_item(item_id: int, body: dict = Body(...)) -> dict:

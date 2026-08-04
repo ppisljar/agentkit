@@ -52,9 +52,16 @@ def _capture(cfg: KitConfig, agent: str, sid: str) -> str | None:
 
 
 def run(cfg: KitConfig, spec: AgentSpec, prompt: str | None = None,
-        timeout: int | None = None) -> dict:
+        timeout: int | None = None, resume: str | None = None) -> dict:
     """Run one agent to completion. Returns
-    {stdout, returncode, session, transcript, duration_sec, result}."""
+    {stdout, returncode, session, transcript, duration_sec, result}.
+
+    `resume` continues an earlier run's conversation instead of starting cold, so a follow-up
+    question can be asked of an agent that still remembers what it just did. It is FORKED
+    (--fork-session): the reply gets a new session id and the original transcript is left exactly
+    as it was, which matters because the history viewer reads those files and _capture() copies
+    them by session id — resuming in place would rewrite a transcript already on display.
+    """
     claude = cfg.resolve_claude_bin()
     if not claude:
         raise AgentError(
@@ -71,6 +78,11 @@ def run(cfg: KitConfig, spec: AgentSpec, prompt: str | None = None,
         "--dangerously-skip-permissions",
         "--disallowedTools", *cfg.deny_tools,
     ]
+    if resume:
+        # --session-id and --resume are mutually exclusive; the forked run gets its own id back
+        # from the CLI, so drop the pre-assigned one and read the real id out of the response.
+        cmd = [c for c in cmd if c not in ("--session-id", sid)]
+        cmd += ["--resume", resume, "--fork-session"]
     for d in spec.add_dirs:
         cmd += ["--add-dir", str(d)]
 
@@ -87,14 +99,29 @@ def run(cfg: KitConfig, spec: AgentSpec, prompt: str | None = None,
         stdout, rc = "", 124
     duration = int(time.time() - started)
 
+    # A forked run gets its id from the CLI, not from us, so read it back off the envelope —
+    # returning the pre-assigned one would hand callers a session that does not exist and the next
+    # follow-up would fail to resume it. Falls back to `sid`, which is correct for a normal run.
+    session = session_id(stdout) or sid
     return {
         "stdout": stdout,
         "returncode": rc,
-        "session": sid,
-        "transcript": _capture(cfg, spec.name, sid),
+        "session": session,
+        "transcript": _capture(cfg, spec.name, session),
         "duration_sec": duration,
         "result": result_text(stdout),
     }
+
+
+def session_id(stdout: str) -> str | None:
+    """The session id the CLI reports in its `--output-format json` envelope, if any."""
+    try:
+        env = json.loads(stdout)
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(env, dict):
+        return None
+    return env.get("session_id") or env.get("sessionId") or None
 
 
 def result_text(stdout: str) -> str:

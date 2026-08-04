@@ -27,7 +27,8 @@ KINDS = ("question", "proposal")
 def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
          duration_sec: int = 0, ok: bool = True,
          status: str | None = None, summary: str | None = None,
-         detail: str | None = None, findings: list | None = None) -> int:
+         detail: str | None = None, findings: list | None = None,
+         session: str | None = None) -> int:
     """Persist one agent run. `payload` is the parsed json block (None if the agent produced none).
 
     The explicit keywords override whatever the payload says. That matters for wrapper-script
@@ -45,10 +46,10 @@ def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
 
     cur = store.execute(
         """INSERT INTO ck_reports (created, agent, status, summary, detail, findings,
-                                   duration_sec, ok)
-           VALUES (?,?,?,?,?,?,?,?)""",
+                                   duration_sec, ok, session)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (time.time(), agent, status, summary, raw[:200_000],
-         json.dumps(findings), int(duration_sec), 1 if ok else 0),
+         json.dumps(findings), int(duration_sec), 1 if ok else 0, session),
     )
     rid = int(cur.lastrowid)
 
@@ -144,6 +145,46 @@ def decide(store: Store, item_id: int, approved: bool, note: str = "") -> dict |
         "UPDATE ck_report_items SET status=?, answer=?, answered_at=? WHERE id=?",
         ("approved" if approved else "rejected", note, time.time(), item_id))
     return item(store, item_id)
+
+
+def thread(store: Store, report_id: int) -> list[dict]:
+    """The follow-up conversation on a report, oldest first."""
+    return [dict(r) for r in store.query(
+        "SELECT * FROM ck_report_messages WHERE report_id=? ORDER BY id", (report_id,))]
+
+
+def add_message(store: Store, report_id: int, role: str, text: str, *, agent: str | None = None,
+                session: str | None = None, job_id: int | None = None,
+                status: str = "done") -> int:
+    cur = store.execute(
+        """INSERT INTO ck_report_messages (report_id, created, role, text, agent, session,
+                                           job_id, status)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (int(report_id), time.time(), role, text, agent, session, job_id, status))
+    return int(cur.lastrowid)
+
+
+def finish_message(store: Store, msg_id: int, text: str, *, session: str | None = None,
+                   status: str = "done") -> None:
+    """Fill in an agent reply once its run returns (it is inserted 'running' so the thread shows
+    the question immediately rather than swallowing it for the minutes the agent takes)."""
+    store.execute(
+        "UPDATE ck_report_messages SET text=?, session=COALESCE(?, session), status=? WHERE id=?",
+        (text, session, status, int(msg_id)))
+
+
+def last_session(store: Store, report_id: int) -> str | None:
+    """The session to resume for the NEXT follow-up: the most recent reply's, else the report's own.
+
+    Threading onto the latest reply rather than always the original run means a back-and-forth
+    stays one conversation instead of repeatedly branching off the first answer.
+    """
+    r = store.one("SELECT session FROM ck_report_messages WHERE report_id=? AND role='agent' "
+                  "AND session IS NOT NULL ORDER BY id DESC LIMIT 1", (int(report_id),))
+    if r and r["session"]:
+        return r["session"]
+    r = store.one("SELECT session FROM ck_reports WHERE id=?", (int(report_id),))
+    return r["session"] if r else None
 
 
 def item(store: Store, item_id: int) -> dict | None:

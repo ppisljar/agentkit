@@ -121,11 +121,17 @@ def run_bg(store: Store, kind: str, label: str, params: dict,
 
 
 def run_subprocess(store: Store, job_id: int, argv: list[str], cwd: str,
-                   env: dict | None = None, timeout: int = 3600) -> int:
+                   env: dict | None = None, timeout: int = 3600,
+                   on_finish=None) -> int:
     """Run `argv`, streaming its output into the job's log. Returns the exit code.
 
     Output is streamed rather than captured at the end so a long scrape shows progress while it
     runs; only the tail is persisted (see MAX_LOG).
+
+    `on_finish(rc)` runs BEFORE the job is marked done. Anything a caller records about the run —
+    the scheduler writing the task's last_status, say — has to be in place by the time the job
+    reports finished, because "job done" is the signal every watcher waits on. Doing it afterwards
+    leaves a window where the job says done and the task still shows its previous status.
     """
     buf: list[str] = []
     last_flush = 0.0
@@ -157,6 +163,8 @@ def run_subprocess(store: Store, job_id: int, argv: list[str], cwd: str,
         return 124
 
     rc = p.returncode or 0
+    if on_finish:
+        on_finish(rc)
     update(store, job_id,
            status=("done" if rc == 0 else "error"),
            error=(None if rc == 0 else f"exited {rc}"),

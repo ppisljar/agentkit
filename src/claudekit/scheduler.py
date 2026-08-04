@@ -293,10 +293,13 @@ class Scheduler:
             else [self.cfg.python_bin, spec.script]
         started = _now()
         pre = self._fire_pre_run(task)
-        rc = jobs.run_subprocess(self.store, job_id, argv, cwd=str(self.cfg.root),
-                                 env=self.cfg.env())
-        self._finish(task, "ok" if rc == 0 else "error", started,
-                     error=None if rc == 0 else f"exit {rc}", pre=pre)
+        # Record the task's outcome BEFORE the job flips to done — the job is the signal every
+        # watcher polls, so finishing afterwards leaves a window in which the job reads done while
+        # the task still shows its previous last_status.
+        jobs.run_subprocess(
+            self.store, job_id, argv, cwd=str(self.cfg.root), env=self.cfg.env(),
+            on_finish=lambda rc: self._finish(task, "ok" if rc == 0 else "error", started,
+                                              error=None if rc == 0 else f"exit {rc}", pre=pre))
 
     def _run_agent(self, task: str, job_id: int) -> None:
         started = _now()

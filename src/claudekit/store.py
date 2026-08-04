@@ -34,6 +34,22 @@ CREATE TABLE IF NOT EXISTS ck_report_items (
 CREATE INDEX IF NOT EXISTS ix_ck_items_status ON ck_report_items(status);
 CREATE INDEX IF NOT EXISTS ix_ck_items_report ON ck_report_items(report_id);
 
+-- Follow-up conversation on a report: the human asks the agent something about what it reported,
+-- and the reply lands back here. A report is the START of a line of enquiry, not the end of it —
+-- previously the only way to ask "why did that happen?" was to go and run the agent by hand,
+-- losing the connection to the report that prompted the question.
+CREATE TABLE IF NOT EXISTS ck_report_messages (
+  id INTEGER PRIMARY KEY, report_id INTEGER, created REAL,
+  role TEXT,                        -- 'user' | 'agent'
+  text TEXT,
+  agent TEXT,                       -- which agent answered (may differ from the report's author)
+  session TEXT,                     -- the run's session id, so the NEXT follow-up can resume it
+  job_id INTEGER,                   -- ck_jobs row while it runs, so the UI can poll and show a log
+  status TEXT DEFAULT 'done',       -- running | done | error
+  FOREIGN KEY (report_id) REFERENCES ck_reports(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS ix_ck_msgs_report ON ck_report_messages(report_id, id);
+
 -- per-agent prompt overrides (defaults live in code; the UI edits these)
 CREATE TABLE IF NOT EXISTS ck_agent_config (
   agent TEXT PRIMARY KEY, system TEXT, prompt TEXT, hour INTEGER, updated REAL
@@ -68,6 +84,10 @@ CREATE TABLE IF NOT EXISTS ck_schedule_task (
 # existing table, so they are ALTERed in on connect.
 _ADDED_COLUMNS = {
     "ck_schedule_task": {"run_requested": "REAL", "last_new_count": "INTEGER"},
+    # The run that produced this report. Needed to offer "continue that conversation" on a
+    # follow-up: the session id used to survive only in ck_jobs.result for kit-run agents, and not
+    # at all for wrapper-script agents, so there was nothing to resume from.
+    "ck_reports": {"session": "TEXT"},
 }
 
 

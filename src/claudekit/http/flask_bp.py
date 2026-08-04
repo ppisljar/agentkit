@@ -11,7 +11,7 @@ import time
 
 from flask import Blueprint, jsonify, request
 
-from .. import agent_run, configfiles, jobs, registry, reports, services
+from .. import agent_run, configfiles, followup, jobs, registry, reports, services
 
 
 def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
@@ -151,6 +151,19 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
             return task
         except KeyError:            # host declares no such task — leave it for the manual button
             return None
+
+    @bp.get("/reports/<int:rid>/thread")
+    def report_thread(rid):
+        return jsonify(reports.thread(store, rid))
+
+    @bp.post("/reports/<int:rid>/ask")
+    def report_ask(rid):
+        """Ask an agent about this report. Body: {prompt, agent?, resume?}."""
+        b = _body()
+        res = followup.ask(cfg, store, rid, str(b.get("prompt", "")),
+                           agent=b.get("agent") or None,
+                           resume=b.get("resume", True) is not False)
+        return jsonify(res) if res.get("ok") else _err(400, res.get("error", "failed"))
 
     @bp.post("/reports/item/<int:item_id>/answer")
     def answer_item(item_id):
