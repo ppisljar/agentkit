@@ -130,7 +130,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {actionable > 0 && <Badge tone="open">{actionable} waiting on you</Badge>}
+          {actionable > 0 && <Badge tone="open">{actionable} needs your input</Badge>}
           {onRunNow && (
             <Button onClick={runNow} loading={running}>{runNowLabel || 'Run now'}</Button>
           )}
@@ -168,7 +168,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
       ) : (
         <>
           {pending.length > 0 && (
-            <Card className="mb-5" title="Waiting on you"
+            <Card className="mb-5" title={`Needs your input (${pending.length})`}
               subtitle="Answer a question or approve a proposal, then press “Apply approved”.">
               <div className="space-y-3">
                 {pending.map((it) => (
@@ -183,24 +183,25 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
             <Empty>No reports yet. Run an agent from Settings → Agents.</Empty>
           )}
 
-          <div className="space-y-3">
+          <div className="space-y-2">
             {reports.map((r) => {
             const expanded = !!inlineDetail && open?.id === r.id
             return (
               <div key={r.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition hover:border-gray-300">
               <button onClick={() => (expanded ? setOpen(null) : refreshOpen(r.id))}
-                className="block w-full p-4 text-left">
+                className="block w-full px-4 py-3 text-left">
                 <div className="flex flex-wrap items-center gap-2">
                   <ProjectPill project={byKey[r.project!]} />
-                  <Badge tone={r.status}>{r.status}</Badge>
+                  {/* an icon reads faster than the word, and matches how status shows elsewhere */}
+                  <span title={r.status}>{RUN_ICON[r.status] || '•'}</span>
                   <span className="font-medium text-gray-900">{agentLabels?.[r.agent] || r.agent}</span>
                   <span className="text-xs text-gray-500">{fmtAgo(r.created)}</span>
                   {!!r.open_items && (
                     <span className="ml-auto"><Badge tone="open">{r.open_items} open</Badge></span>
                   )}
                 </div>
-                {r.summary && <p className="mt-2 text-sm text-gray-600">{r.summary}</p>}
-                <div className="mt-2 text-xs text-gray-400">
+                {r.summary && <p className="mt-1 text-sm text-gray-600">{r.summary}</p>}
+                <div className="mt-1 text-xs text-gray-400">
                   {(r.findings || []).length} findings · {r.duration_sec}s
                   {inlineDetail && <span className="float-right">{expanded ? '▾' : '▸'}</span>}
                 </div>
@@ -229,6 +230,8 @@ const SEV_ICON: Record<string, string> = {
   info: 'ℹ️', warn: '⚠️', fail: '❌', pass: '✅', done: '✅', skipped: '⏭️',
 }
 const SEV_RE = /^\[([a-z]+)\]\s*/i
+// How a RUN ended, as shown on each report row.
+const RUN_ICON: Record<string, string> = { ok: '✅', warn: '⚠️', fail: '❌', error: '❌' }
 
 /** A finding as one line, for the compact list under a follow-up reply. The full card treatment
  *  is reserved for a report's own findings, above. The icon keeps its word as a tooltip: an icon
@@ -295,15 +298,25 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
         <Card title="Findings">
           <div className="space-y-2">
             {report.findings.map((f, i) => (
+              /* A finding is EITHER a dict (severity/area/title/detail) or an already-rendered
+                 string like "[warn] downloads: ...". Hosts differ, and reading dict fields off a
+                 string yields undefined for every one of them — which rendered each finding as a
+                 lone "info" badge with no text at all. */
+              typeof f === 'string' ? (
+                <div key={i} className="rounded-lg border border-gray-100 p-3 text-sm text-gray-700">
+                  <FindingLine f={f} />
+                </div>
+              ) : (
               <div key={i} className="rounded-lg border border-gray-100 p-3">
                 <div className="flex items-center gap-2">
-                  <Badge tone={f.severity}>{f.severity || 'info'}</Badge>
+                  <span title={f.severity || 'info'}>{SEV_ICON[(f.severity || 'info').toLowerCase()] || 'ℹ️'}</span>
                   {f.area && <span className="text-xs uppercase tracking-wide text-gray-400">{f.area}</span>}
                   <span className="font-medium text-gray-900">{f.title}</span>
                   {f.action === 'fixed' && <Badge tone="ok">fixed</Badge>}
                 </div>
                 {f.detail && <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{f.detail}</p>}
               </div>
+              )
             ))}
           </div>
         </Card>
