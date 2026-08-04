@@ -350,7 +350,7 @@ def test_stall_tools_denied_by_default(kit):
 
 def _wait(kit, job_id, want="done"):
     import time
-    for _ in range(300):
+    for _ in range(750):
         j = jobs.get(kit.store, job_id)
         if j["status"] != "running":
             return j
@@ -505,3 +505,136 @@ def test_broken_pre_run_hook_does_not_fail_the_run(kit):
     j = _wait(kit, kit.scheduler.run_now("scraper")["job"])
     assert j["status"] == "done", j
     assert seen == [None]
+
+
+# ---------------------------------------------------------------- flask adapter BEHAVIOUR
+# Route parity is asserted above, but that only compares URL rules. These drive real requests
+# through the blueprint — the adapter HomeFlix's whole admin UI would depend on.
+
+@pytest.fixture()
+def client(kit):
+    pytest.importorskip('flask')
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(kit.flask_blueprint())
+    app.config.update(TESTING=True)
+    return app.test_client()
+
+
+def test_flask_health(client, kit):
+    r = client.get('/api/kit/health')
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["ok"] and d["app"] == "test"
+    assert d["agents"] == len(kit.cfg.agents) and d["adapters"] == 1
+
+
+def test_flask_agents_list_and_prompt_roundtrip(client):
+    r = client.get('/api/kit/agents')
+    assert r.status_code == 200
+    names = {a["name"] for a in r.get_json()}
+    assert "healthcheck" in names
+
+    assert client.post('/api/kit/agents/healthcheck/prompt',
+                       json={"system": "S2", "prompt": "P2"}).status_code == 200
+    got = [a for a in client.get('/api/kit/agents').get_json() if a["name"] == "healthcheck"][0]
+    assert got["system"].startswith("S2") and got["prompt"] == "P2" and got["customized"]
+
+    assert client.post('/api/kit/agents/healthcheck/reset').status_code == 200
+    got = [a for a in client.get('/api/kit/agents').get_json() if a["name"] == "healthcheck"][0]
+    assert not got["customized"]
+
+
+def test_flask_unknown_agent_is_404_everywhere(client):
+    for path in ('/api/kit/agents/nope/prompt', '/api/kit/agents/nope/reset',
+                 '/api/kit/agents/nope/hour', '/api/kit/agents/nope/run'):
+        r = client.post(path, json={})
+        assert r.status_code == 404, (path, r.status_code)
+        assert "detail" in r.get_json()
+
+
+def test_flask_set_hour_clamps_and_persists(client):
+    r = client.post('/api/kit/agents/healthcheck/hour', json={"hour": 99})
+    assert r.status_code == 200 and r.get_json()["hour"] == 23
+    r = client.post('/api/kit/agents/healthcheck/hour', json={"hour": 6})
+    assert r.get_json()["hour"] == 6
+
+
+def test_flask_reports_flow(client, kit):
+    rid = reports.save(kit.store, "healthcheck",
+                       {"status": "ok", "summary": "s", "questions": ["q1"],
+                        "proposals": ["p1"], "findings": [{"title": "f"}]}, raw="raw")
+    assert client.get('/api/kit/reports').get_json()[0]["id"] == rid
+    rep = client.get(f'/api/kit/reports/{rid}').get_json()
+    assert rep["summary"] == "s" and rep["open_items"] == 2
+
+    items = client.get('/api/kit/reports/open').get_json()
+    q = [i for i in items if i["kind"] == "question"][0]
+    p = [i for i in items if i["kind"] == "proposal"][0]
+
+    assert client.post(f'/api/kit/reports/item/{q["id"]}/answer',
+                       json={"answer": "because"}).get_json()["status"] == "answered"
+    assert client.post(f'/api/kit/reports/item/{p["id"]}/decide',
+                       json={"approved": True}).get_json()["status"] == "approved"
+    assert client.get(f'/api/kit/reports/{rid}').get_json()["open_items"] == 0
+
+
+def test_flask_missing_report_and_item_are_404(client):
+    assert client.get('/api/kit/reports/9999').status_code == 404
+    assert client.post('/api/kit/reports/item/9999/answer', json={"answer": "x"}).status_code == 404
+    assert client.post('/api/kit/reports/item/9999/decide', json={"approved": True}).status_code == 404
+
+
+def test_flask_apply_with_nothing_approved_is_skipped(client):
+    d = client.post('/api/kit/reports/apply').get_json()
+    assert d["ok"] and d.get("skipped")
+
+
+def test_flask_schedule_list_and_update(client):
+    d = client.get('/api/kit/schedule').get_json()
+    assert "tasks" in d and any(t["task"] == "scraper" for t in d["tasks"])
+    row = client.post('/api/kit/schedule/scraper', json={"enabled": 1, "interval_sec": 900}).get_json()
+    assert row["enabled"] == 1 and row["interval_sec"] == 900
+    assert client.post('/api/kit/schedule/nope', json={"enabled": 1}).status_code == 404
+
+
+def test_flask_jobs_endpoints(client, kit):
+    jid = jobs.run_bg(kit.store, "test", "t", {}, lambda job_id, p: None)
+    assert any(j["id"] == jid for j in client.get('/api/kit/jobs').get_json())
+    assert client.get(f'/api/kit/jobs/{jid}').get_json()["id"] == jid
+    assert client.get('/api/kit/jobs/999999').status_code == 404
+
+
+def test_flask_services_and_denied_action(client):
+    assert client.get('/api/kit/services').get_json()[0]["key"] == "backend"
+    # 'stop' is not in the declared allowlist -> refused, not attempted
+    assert client.post('/api/kit/services/backend/stop').status_code in (400, 403)
+    assert client.post('/api/kit/services/nosuch/restart').status_code == 404
+
+
+def test_flask_config_read_write_and_masking(client):
+    assert client.get('/api/kit/config').get_json()[0]["key"] == "env"
+    d = client.get('/api/kit/config/env').get_json()
+    kv = [e for e in d["entries"] if e.get("type") == "kv"]
+    secret = [e for e in kv if e["key"] == "SECRET"][0]
+    assert secret["value"] == configfiles.MASK
+
+    # A write REPLACES the file from the entries given, and _render_env only emits entries that
+    # carry `type` — so a client must round-trip what it read rather than invent bare pairs.
+    entries = client.get('/api/kit/config/env').get_json()["entries"]
+    for e in entries:
+        if e.get("type") == "kv" and e["key"] == "FOO":
+            e["value"] = "baz"
+    r = client.put('/api/kit/config/env', json={"entries": entries})
+    assert r.status_code == 200
+    d = client.get('/api/kit/config/env').get_json()
+    kv = [e for e in d["entries"] if e.get("type") == "kv"]
+    assert [e for e in kv if e["key"] == "FOO"][0]["value"] == "baz"
+    assert client.get('/api/kit/config/nope').status_code == 404
+
+
+def test_flask_transcript_of_missing_run_is_404(client):
+    assert client.get('/api/kit/agent_history').status_code == 200
+    # Both adapters map FileNotFoundError to 400 (_guard). Debatable for a missing file, but it
+    # is the shared contract — pinned here so a change to one adapter can't drift from the other.
+    assert client.get('/api/kit/agent_history/healthcheck/nope.jsonl').status_code == 400

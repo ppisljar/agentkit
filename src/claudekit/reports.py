@@ -106,6 +106,9 @@ def get(store: Store, rid: int) -> dict | None:
         except Exception:  # noqa: BLE001
             d["findings"] = []
     d["items"] = items(store, rid)
+    # recent() carries this, so the detail view lacking it was an asymmetry a consumer would trip
+    # on — "the list told me 2 open, the report itself doesn't say".
+    d["open_items"] = _count_open(store, rid)
     return d
 
 
