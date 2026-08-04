@@ -181,13 +181,38 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
   )
 }
 
+// Severity icons. Findings arrive in TWO shapes — a host may store them pre-rendered as strings
+// with a "[warn] area: title" prefix, or as dicts with a `severity` field — so both are handled or
+// half of them keep their bracketed tag. pass/done/skipped are included because agents emit them.
+const SEV_ICON: Record<string, string> = {
+  info: 'ℹ️', warn: '⚠️', fail: '❌', pass: '✅', done: '✅', skipped: '⏭️',
+}
+const SEV_RE = /^\[([a-z]+)\]\s*/i
+
 /** A finding as one line, for the compact list under a follow-up reply. The full card treatment
- *  is reserved for a report's own findings, above. */
-function findingText(f: Finding | string): string {
-  if (typeof f === 'string') return f
-  const head = [f.severity && `[${f.severity}]`, f.area && `${f.area}:`, f.title]
-    .filter(Boolean).join(' ')
-  return [head, f.detail].filter(Boolean).join(' — ')
+ *  is reserved for a report's own findings, above. The icon keeps its word as a tooltip: an icon
+ *  alone is not readable by a screen reader, and severity is the part you cannot afford to lose. */
+function FindingLine({ f }: { f: Finding | string }) {
+  let sev: string | undefined
+  let text: string
+  if (typeof f === 'string') {
+    const m = SEV_RE.exec(f)
+    sev = m?.[1]?.toLowerCase()
+    // an unrecognised tag stays visible rather than being silently eaten
+    text = sev && SEV_ICON[sev] ? f.slice(m![0].length) : f
+    if (sev && !SEV_ICON[sev]) sev = undefined
+  } else {
+    sev = (f.severity || '').toLowerCase() || undefined
+    text = [[f.area && `${f.area}:`, f.title].filter(Boolean).join(' '), f.detail]
+      .filter(Boolean).join(' — ')
+    if (f.action === 'fixed') text += ' (fixed)'
+  }
+  return (
+    <>
+      {sev && SEV_ICON[sev] && <span className="mr-1.5" title={sev}>{SEV_ICON[sev]}</span>}
+      {text}
+    </>
+  )
 }
 
 function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project }: {
@@ -344,7 +369,7 @@ function FollowUp({ api, report, project, onError, agentLabels }: {
               {/* defensive: a malformed field must never take the whole page down with it */}
               {Array.isArray(m.findings) && m.findings.length > 0 && (
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-gray-600">
-                  {m.findings.map((f, i) => <li key={i}>{findingText(f)}</li>)}
+                  {m.findings.map((f, i) => <li key={i}><FindingLine f={f} /></li>)}
                 </ul>
               )}
               {/* questions/proposals THIS reply raised, answerable where they were asked */}
