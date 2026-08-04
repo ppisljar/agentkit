@@ -412,3 +412,61 @@ def test_broken_post_run_hook_does_not_fail_the_task(kit):
     j = _wait(kit, kit.scheduler.run_now("scraper")["job"])
     assert j["status"] == "done", j
     assert kit.scheduler.get("scraper")["last_status"] == "ok"
+
+
+# ---------------------------------------------------------------- new-item counting
+
+def test_count_items_records_delta_and_reaches_post_run(kit):
+    """HomeFlix's '+N new' and its rebuild-only-if-something-changed gate."""
+    counts = iter([10, 13])
+    kit.cfg.count_items = lambda task: next(counts)
+    seen = []
+    kit.cfg.post_run = lambda task, status, info: seen.append(info)
+    _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert kit.scheduler.get("scraper")["last_new_count"] == 3
+    assert seen[0]["new_count"] == 3
+
+
+def test_count_items_absent_leaves_new_count_null(kit):
+    _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert kit.scheduler.get("scraper")["last_new_count"] is None
+
+
+def test_broken_count_items_does_not_fail_the_run(kit):
+    def boom(task):
+        raise RuntimeError("count exploded")
+    kit.cfg.count_items = boom
+    j = _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert j["status"] == "done", j
+    assert kit.scheduler.get("scraper")["last_new_count"] is None
+
+
+def test_count_never_goes_negative(kit):
+    counts = iter([10, 4])          # a run that pruned rows must not report -6
+    kit.cfg.count_items = lambda task: next(counts)
+    _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert kit.scheduler.get("scraper")["last_new_count"] == 0
+
+
+# ---------------------------------------------------------------- report overrides
+
+def test_report_explicit_fields_override_payload(kit):
+    """A wrapper script that knows the truth better than the model does."""
+    rid = reports.save(kit.store, "sldubs",
+                       {"status": "ok", "summary": "model said this", "findings": ["a"]},
+                       raw="raw text", status="warn", summary="Queued 4 (3 torrent, 1 provider)",
+                       detail="QUEUED THIS RUN (4): ...", findings=[])
+    r = reports.get(kit.store, rid)
+    assert r["status"] == "warn"
+    assert r["summary"] == "Queued 4 (3 torrent, 1 provider)"
+    assert r["detail"].startswith("QUEUED THIS RUN")
+    assert r["findings"] == []
+
+
+def test_report_without_overrides_still_reads_the_payload(kit):
+    rid = reports.save(kit.store, "healthcheck",
+                       {"status": "ok", "summary": "s", "findings": [{"title": "t"}]},
+                       raw="raw")
+    r = reports.get(kit.store, rid)
+    assert (r["status"], r["summary"], r["detail"]) == ("ok", "s", "raw")
+    assert len(r["findings"]) == 1

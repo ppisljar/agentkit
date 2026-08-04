@@ -103,10 +103,16 @@ class KitConfig:
     # time rather than baked into each spec, so it also reaches prompts the user has customised in
     # the UI — a host-wide rule shouldn't be lost the moment someone edits one agent's prompt.
     system_hints: tuple[str, ...] = ()
-    # Called after a scheduler task finishes: fn(task, status, result_dict). Lets a host trigger
-    # follow-up work — e.g. rebuild a static site when a scrape actually produced new items.
+    # Called after a scheduler task finishes: fn(task, status, info). `info` carries result, error,
+    # duration_sec and new_count. Lets a host trigger follow-up work — e.g. rebuild a static site,
+    # but only when the run actually produced something (see count_items).
     # Exceptions are logged and swallowed; a failing hook must not fail the task.
     post_run: object | None = None
+    # fn(task) -> int | None: how many items the app holds for `task` right now. Called before and
+    # after an adapter run; the difference is stored as last_new_count and passed to post_run.
+    # The kit cannot know what an adapter scraped, so the host counts — a catalog row count, a file
+    # count, whatever "an item" means to it. Return None to opt out for a given task.
+    count_items: object | None = None
     agent_timeout_sec: int = 2700
     keep_transcripts: int = 60
 

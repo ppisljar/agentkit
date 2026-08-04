@@ -94,6 +94,17 @@ Fires once for every finished task — adapter, agent and agent-script alike. A 
 logged and swallowed: follow-up work failing must not retroactively mark a scrape that worked as
 failed.
 
+`info` carries `result`, `error`, `duration_sec` and `new_count`. To get `new_count`, tell the kit
+how to count — it cannot know what your adapter scraped:
+
+```python
+KitConfig(..., count_items=lambda task: db.count(task))
+```
+
+It's called before and after each adapter run; the delta lands in `ck_schedule_task.last_new_count`
+(the "+N new" the UI shows) and in `info["new_count"]`, so a hook can skip expensive follow-up work
+when a run changed nothing. Counting is advisory — a failing counter never fails the run.
+
 ## Host-wide prompt rules: `system_hints`
 
 ```python

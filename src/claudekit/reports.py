@@ -25,12 +25,23 @@ KINDS = ("question", "proposal")
 
 
 def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
-         duration_sec: int = 0, ok: bool = True) -> int:
-    """Persist one agent run. `payload` is the parsed json block (None if the agent produced none)."""
+         duration_sec: int = 0, ok: bool = True,
+         status: str | None = None, summary: str | None = None,
+         detail: str | None = None, findings: list | None = None) -> int:
+    """Persist one agent run. `payload` is the parsed json block (None if the agent produced none).
+
+    The explicit keywords override whatever the payload says. That matters for wrapper-script
+    agents (`AgentSpec.script`), which often know the truth better than the model does — e.g. one
+    that diffs the database before and after can report exactly what its run changed, and mark a
+    run that returned no structured block as 'warn' rather than letting it pass as clean.
+    """
     payload = payload or {}
-    status = str(payload.get("status") or ("ok" if ok else "fail"))
-    summary = str(payload.get("summary") or payload.get("report_summary") or "")
-    findings = payload.get("findings") or []
+    status = str(status if status is not None
+                 else (payload.get("status") or ("ok" if ok else "fail")))
+    summary = str(summary if summary is not None
+                  else (payload.get("summary") or payload.get("report_summary") or ""))
+    findings = findings if findings is not None else (payload.get("findings") or [])
+    raw = detail if detail is not None else raw
 
     cur = store.execute(
         """INSERT INTO ck_reports (created, agent, status, summary, detail, findings,

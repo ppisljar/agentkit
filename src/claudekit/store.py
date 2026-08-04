@@ -56,6 +56,9 @@ CREATE TABLE IF NOT EXISTS ck_schedule_task (
   args TEXT,
   last_run REAL, last_duration_sec INTEGER, last_status TEXT,
   last_result TEXT, last_error TEXT, next_run REAL,
+  -- items the run added (host-supplied via KitConfig.count_items); drives "+N new" and
+  -- lets a post_run hook skip expensive follow-up work when a run changed nothing
+  last_new_count INTEGER,
   -- set by the web process to ask the scheduler (possibly another process) to run this now
   run_requested REAL
 );
@@ -64,7 +67,7 @@ CREATE TABLE IF NOT EXISTS ck_schedule_task (
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS cannot add a column to an
 # existing table, so they are ALTERed in on connect.
 _ADDED_COLUMNS = {
-    "ck_schedule_task": {"run_requested": "REAL"},
+    "ck_schedule_task": {"run_requested": "REAL", "last_new_count": "INTEGER"},
 }
 
 

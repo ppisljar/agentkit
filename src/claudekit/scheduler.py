@@ -157,8 +157,21 @@ class Scheduler:
         job_id = jobs.run_bg(self.store, kind, label, {"task": task}, _work)
         return {"ok": True, "task": task, "job": job_id}
 
+    def count_items(self, task: str) -> int | None:
+        """Host's current item count for `task`, or None if it doesn't count this one."""
+        fn = getattr(self.cfg, "count_items", None)
+        if not callable(fn):
+            return None
+        try:
+            n = fn(task)
+            return int(n) if n is not None else None
+        except Exception as e:  # noqa: BLE001 — counting is advisory; never fail a run over it
+            log.warning("count_items failed for %s: %s: %s", task, type(e).__name__, e)
+            return None
+
     def _finish(self, task: str, status: str, started: float,
-                result: str = "", error: str | None = None) -> None:
+                result: str = "", error: str | None = None,
+                new_count: int | None = None) -> None:
         row = self.get(task) or {}
         nxt = None
         if row.get("kind") == "agent" and row.get("hour") is not None:
@@ -167,12 +180,12 @@ class Scheduler:
             nxt = _now() + int(row["interval_sec"])
         self.store.execute(
             """UPDATE ck_schedule_task SET last_run=?, last_duration_sec=?, last_status=?,
-                      last_result=?, last_error=?, next_run=? WHERE task=?""",
-            (started, int(_now() - started), status, result[:4000], error, nxt, task))
-        self._fire_post_run(task, status, result, error, started)
+                      last_result=?, last_error=?, next_run=?, last_new_count=? WHERE task=?""",
+            (started, int(_now() - started), status, result[:4000], error, nxt, new_count, task))
+        self._fire_post_run(task, status, result, error, started, new_count)
 
     def _fire_post_run(self, task: str, status: str, result: str,
-                       error: str | None, started: float) -> None:
+                       error: str | None, started: float, new_count: int | None = None) -> None:
         """Notify the host that a task finished, so it can trigger follow-up work (rebuild a static
         site after a scrape that found new items, reindex a catalog, …).
 
@@ -185,7 +198,7 @@ class Scheduler:
             return
         try:
             hook(task, status, {"result": result, "error": error, "started": started,
-                                "duration_sec": int(_now() - started)})
+                                "duration_sec": int(_now() - started), "new_count": new_count})
         except Exception as e:  # noqa: BLE001 — a broken hook must not break the scheduler
             log.warning("post_run hook failed for %s: %s: %s", task, type(e).__name__, e)
 
@@ -203,10 +216,15 @@ class Scheduler:
         except Exception:  # noqa: BLE001
             extra = []
         started = _now()
+        # Count around the run so the host can tell whether it actually produced anything. The kit
+        # has no idea what an adapter scraped, so the host supplies the count.
+        before = self.count_items(task)
         rc = jobs.run_subprocess(self.store, job_id, [*argv, *extra], cwd=str(self.cfg.root),
                                  env=self.cfg.env())
+        after = self.count_items(task)
+        new_count = max(0, after - before) if (before is not None and after is not None) else None
         self._finish(task, "ok" if rc == 0 else "error", started,
-                     error=None if rc == 0 else f"exit {rc}")
+                     error=None if rc == 0 else f"exit {rc}", new_count=new_count)
 
     def _run_agent_script(self, task: str, spec, job_id: int) -> None:
         """Run a host script that owns the whole agent run.
