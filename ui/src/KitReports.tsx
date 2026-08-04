@@ -188,26 +188,31 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
             const expanded = !!inlineDetail && open?.id === r.id
             return (
               <div key={r.id} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition hover:border-gray-300">
+              {/* ONE LINE. A run list is scanned, not read: status, who, what, how long ago —
+                  with the summary truncated rather than wrapped, so ten runs fit on a screen
+                  instead of three. Everything else lives in the expanded body. */}
               <button onClick={() => (expanded ? setOpen(null) : refreshOpen(r.id))}
-                className="block w-full px-4 py-3 text-left">
-                <div className="flex flex-wrap items-center gap-2">
-                  <ProjectPill project={byKey[r.project!]} />
-                  {/* an icon reads faster than the word, and matches how status shows elsewhere */}
-                  <span title={r.status}>{RUN_ICON[r.status] || '•'}</span>
-                  <span className="font-medium text-gray-900">{agentLabels?.[r.agent] || r.agent}</span>
-                  <span className="text-xs text-gray-500">{fmtAgo(r.created)}</span>
-                  {!!r.open_items && (
-                    <span className="ml-auto"><Badge tone="open">{r.open_items} open</Badge></span>
-                  )}
-                </div>
-                {r.summary && <p className="mt-1 text-sm text-gray-600">{r.summary}</p>}
-                <div className="mt-1 text-xs text-gray-400">
-                  {(r.findings || []).length} findings · {r.duration_sec}s
-                  {inlineDetail && <span className="float-right">{expanded ? '▾' : '▸'}</span>}
-                </div>
+                className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left hover:bg-gray-50">
+                <ProjectPill project={byKey[r.project!]} />
+                <span className="shrink-0 text-[15px]" title={r.status}>{RUN_ICON[r.status] || '•'}</span>
+                <span className="shrink-0 text-[13px] text-gray-500">
+                  {agentLabels?.[r.agent] || r.agent}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-gray-900">
+                  {r.summary || '(no summary)'}
+                </span>
+                {!!r.open_items && (
+                  <span className="shrink-0 rounded-md bg-amber-100 px-1.5 py-0.5 text-[11px] font-bold text-amber-800">
+                    {r.open_items} open
+                  </span>
+                )}
+                <span className="shrink-0 whitespace-nowrap text-[11.5px] text-gray-400">
+                  {fmtAgo(r.created)}
+                </span>
+                <span className="shrink-0 text-gray-400">{expanded ? '▾' : '▸'}</span>
               </button>
               {expanded && open && (
-                <div className="border-t border-gray-100 px-4 pb-4 pt-3">
+                <div className="border-t border-gray-200 px-4 pb-3.5 pt-1">
                   <ReportDetail api={api} report={open} agentLabels={agentLabels}
                     project={byKey[open.project!]} inline
                     onBack={() => setOpen(null)}
@@ -268,7 +273,6 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
    *  the way back, so a "← All reports" link would be a dead control. */
   inline?: boolean
 }) {
-  const [showRaw, setShowRaw] = React.useState(false)
   // In fleet mode the id is namespaced ("homeflix:23"); show the project as a pill and the
   // number the project itself would show, rather than repeating the key inside the heading.
   const shown = report.local_id ?? report.id
@@ -296,29 +300,18 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
 
       {(report.findings || []).length > 0 && (
         <Card title="Findings">
-          <div className="space-y-2">
+          <ul className="list-disc space-y-1.5 pl-5">
+            {/* A list, not a stack of panels: findings are read top to bottom, and a border around
+                each one turns five of them into five boxes to parse. A finding is EITHER a dict or
+                an already-rendered "[warn] area: ..." string — hosts differ, so both are handled;
+                reading dict fields off a string yields undefined for every one and used to render
+                a lone "info" badge with no text. */}
             {report.findings.map((f, i) => (
-              /* A finding is EITHER a dict (severity/area/title/detail) or an already-rendered
-                 string like "[warn] downloads: ...". Hosts differ, and reading dict fields off a
-                 string yields undefined for every one of them — which rendered each finding as a
-                 lone "info" badge with no text at all. */
-              typeof f === 'string' ? (
-                <div key={i} className="rounded-lg border border-gray-100 p-3 text-sm text-gray-700">
-                  <FindingLine f={f} />
-                </div>
-              ) : (
-              <div key={i} className="rounded-lg border border-gray-100 p-3">
-                <div className="flex items-center gap-2">
-                  <span title={f.severity || 'info'}>{SEV_ICON[(f.severity || 'info').toLowerCase()] || 'ℹ️'}</span>
-                  {f.area && <span className="text-xs uppercase tracking-wide text-gray-400">{f.area}</span>}
-                  <span className="font-medium text-gray-900">{f.title}</span>
-                  {f.action === 'fixed' && <Badge tone="ok">fixed</Badge>}
-                </div>
-                {f.detail && <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600">{f.detail}</p>}
-              </div>
-              )
+              <li key={i} className="text-[12.5px] leading-relaxed text-gray-700">
+                <FindingLine f={f} />
+              </li>
             ))}
-          </div>
+          </ul>
         </Card>
       )}
 
@@ -338,12 +331,12 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
         agentLabels={agentLabels} />
 
       {report.detail && (
-        <Card title="Raw agent output"
-          right={<Button variant="ghost" onClick={() => setShowRaw(!showRaw)}>
-            {showRaw ? 'Hide' : 'Show'}
-          </Button>}>
-          {showRaw && <LogBox text={report.detail} className="max-h-[32rem]" />}
-        </Card>
+        <details className="mt-2.5">
+          <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600">
+            Full report
+          </summary>
+          <LogBox text={report.detail} className="mt-2 max-h-[21rem]" />
+        </details>
       )}
     </div>
   )
