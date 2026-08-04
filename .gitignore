@@ -8,3 +8,8 @@ node_modules/
 *.db
 *.db-wal
 *.db-shm
+
+# Claude Code session transcripts kept with the project (see the session viewer's
+# discoverSessions()). Multi-MB of conversation history, and it can quote file contents
+# and command output verbatim — local history, not source.
+.claude/sessions/
