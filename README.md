@@ -209,6 +209,42 @@ thread handle, so the web process can report the daemon's health without sharing
 
 Run exactly one loop. Two would race to claim the same task.
 
+## Many projects at once: `claudekit.fleet`
+
+Once a box runs several claudeKit apps, "is anything waiting on me?" means opening each one's
+Reports page in turn. `claudekit.fleet` merges them into a single report list, addressed by a
+**fleet id** — `"<project key>:<local id>"`, e.g. `homeflix:23`.
+
+```python
+from claudekit.fleet import Fleet
+from claudekit.http.fleet_router import build_router
+
+fleet = Fleet.from_json("projects.json")
+app.include_router(build_router(fleet, prefix="/api/fleet"))
+```
+
+```json
+[{"key": "homeflix", "label": "HomeFlix",
+  "db": "/srv/HomeFlix/data/app.db", "url": "/homeflix/", "color": "#e50914"}]
+```
+
+The project list is data rather than a convention because the database path genuinely differs per
+host: an app may keep the `ck_` tables in its own database or in a dedicated one.
+
+It reads each project's SQLite file **directly** rather than proxying its HTTP API — a project
+need not expose one, and reports are most useful when a project's web app is down. Listing
+connections are read-only (`file:…?mode=ro`) and short-lived; a project whose database is missing
+becomes a visibly-degraded row instead of an error page. The only writes are the two a project's
+own web process already performs: a decision on a `ck_report_items` row, and a `run_requested`
+stamp asking that project's scheduler to carry it out.
+
+`http/fleet_router.py` mounts the same routes as the single-app router, so the `KitReports`
+component serves a fleet with nothing but a different `base` plus a `projects` prop for the
+filter. `POST /reports/apply` is the one difference in kind: a fleet host cannot run another
+project's agent, so it queues a run request per project and reports what it queued.
+
+Nothing else in the kit imports this module, and hosts that serve one app are unaffected.
+
 ## Known limitations
 
 - **No auth.** The router assumes the host app protects its own admin routes. Mount it behind
@@ -227,7 +263,9 @@ Run exactly one loop. Two would race to claim the same task.
 pip install -e '.[dev]' && pytest
 ```
 
-21 tests cover the store, registry overrides, the report/approval loop, job lifecycle including
-failures, config masking and path-escape refusal, scheduler task registration, the cross-process
-run-request and heartbeat paths, and route parity between the two HTTP adapters — none require
-network, Claude Code or systemd.
+`tests/test_core.py` covers the store, registry overrides, the report/approval loop, job lifecycle
+including failures, config masking and path-escape refusal, scheduler task registration, the
+cross-process run-request and heartbeat paths, and route parity between the two HTTP adapters.
+`tests/test_fleet.py` covers the multi-project view over several real project databases: id
+round-tripping, merge order and limits, degraded projects, and that a decision lands in the right
+project and wakes only that project's apply task. None require network, Claude Code or systemd.

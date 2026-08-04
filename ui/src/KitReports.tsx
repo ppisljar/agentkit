@@ -4,35 +4,52 @@
  * An agent investigates read-only and records what it found, what it needs decided (questions)
  * and what it would like to do but didn't (proposals). You answer and approve here; "Apply
  * approved" then hands *only* those items to the apply agent.
+ *
+ * The same component serves one app or a whole fleet. Point `base` at an app's /api/kit and it
+ * behaves exactly as it always has; point it at a `claudekit.fleet` API and pass `projects`, and
+ * it grows a project filter along the top and labels every row with the project it came from.
+ * Everything fleet-related is opt-in: with no `projects` prop nothing about the page changes.
  */
 
 import React from 'react'
-import { Job, KitApi, Report, ReportItem, fmtAgo } from './api'
+import { ApplyResult, Job, KitApi, Report, ReportItem, RowId, fmtAgo } from './api'
 import { Badge, Button, Card, Empty, ErrorNote, LogBox, Spinner, cx } from './ui'
 
-export function KitReports({ base = '/api/kit', agentLabels }: {
+/** A project the reports may belong to. `key` is what the API filters on. */
+export type ProjectTag = { key: string; label: string; color?: string; url?: string }
+
+export function KitReports({ base = '/api/kit', agentLabels, projects, title, subtitle }: {
   base?: string
   /** Optional agent-id -> display name, so rows read "Daily health check" rather than "selfcheck".
    *  Left to the host because the kit doesn't know which of an app's agents deserve friendlier
    *  names, and the ids are what the API speaks. */
   agentLabels?: Record<string, string>
+  /** Fleet mode: the projects behind this API. Filtering happens server-side (?project=), so the
+   *  newest-N limit stays correct instead of thinning out whichever project is chattiest. */
+  projects?: ProjectTag[]
+  title?: React.ReactNode
+  subtitle?: React.ReactNode
 }) {
   const api = React.useMemo(() => new KitApi(base), [base])
   const [reports, setReports] = React.useState<Report[]>([])
   const [open, setOpen] = React.useState<Report | null>(null)
   const [pending, setPending] = React.useState<ReportItem[]>([])
   const [err, setErr] = React.useState<string | null>(null)
+  const [notice, setNotice] = React.useState<string | null>(null)
   const [applyJob, setApplyJob] = React.useState<number | null>(null)
   const [applying, setApplying] = React.useState(false)
   const [job, setJob] = React.useState<Job | null>(null)
+  const [project, setProject] = React.useState<string | null>(null)
+  const byKey = React.useMemo(
+    () => Object.fromEntries((projects || []).map((p) => [p.key, p])), [projects])
 
   const load = React.useCallback(async () => {
     try {
-      const [r, p] = await Promise.all([api.reports(), api.openItems()])
+      const [r, p] = await Promise.all([api.reports(30, project), api.openItems(project)])
       setReports(r)
       setPending(p)
     } catch (e: any) { setErr(e.message) }
-  }, [api])
+  }, [api, project])
 
   React.useEffect(() => { load() }, [load])
 
@@ -54,7 +71,7 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
     return () => { alive = false; clearTimeout(timer) }
   }, [api, applyJob, load])
 
-  const refreshOpen = async (id: number) => {
+  const refreshOpen = async (id: RowId) => {
     try { setOpen(await api.report(id)) } catch (e: any) { setErr(e.message) }
     load()
   }
@@ -65,10 +82,15 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
 
   const apply = async () => {
     setApplying(true)
+    setNotice(null)
     try {
-      const r = await api.applyDecisions()
+      const r: ApplyResult = await api.applyDecisions(project)
       if (r.skipped) setErr('Nothing is approved or answered yet — decide on an item first.')
       else if (r.job) setApplyJob(r.job)
+      // A fleet host cannot run another project's agent; it leaves each project a run request and
+      // says so. Without this the button would look like it had done nothing at all.
+      else if (r.note) setNotice(r.note)
+      if (r.failed?.length) setErr(r.failed.map((f) => `${f.project}: ${f.error}`).join('\n'))
     } catch (e: any) { setErr(e.message) }
     finally { setApplying(false) }
   }
@@ -77,9 +99,9 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
     <div className="mx-auto max-w-5xl px-4 py-6">
       <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Reports</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{title || 'Reports'}</h1>
           <p className="mt-1 text-sm text-gray-500">
-            What the agents found, and anything waiting on you.
+            {subtitle || 'What the agents found, and anything waiting on you.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -88,7 +110,13 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
         </div>
       </div>
 
+      {projects && projects.length > 0 && (
+        <ProjectFilter projects={projects} value={project}
+          onChange={(k) => { setProject(k); setOpen(null) }} />
+      )}
+
       <ErrorNote error={err} onDismiss={() => setErr(null)} />
+      <Notice text={notice} onDismiss={() => setNotice(null)} />
 
       {job && (
         <Card className="mb-4" title="Apply agent"
@@ -106,7 +134,7 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
       )}
 
       {open ? (
-        <ReportDetail api={api} report={open} agentLabels={agentLabels}
+        <ReportDetail api={api} report={open} agentLabels={agentLabels} project={byKey[open.project!]}
           onBack={() => { setOpen(null); load() }}
           onChanged={() => refreshOpen(open.id)} onError={setErr} />
       ) : (
@@ -116,7 +144,8 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
               subtitle="Answer a question or approve a proposal, then press “Apply approved”.">
               <div className="space-y-3">
                 {pending.map((it) => (
-                  <ItemRow key={it.id} api={api} item={it} onChanged={load} onError={setErr} />
+                  <ItemRow key={it.id} api={api} item={it} project={byKey[it.project!]}
+                    onChanged={load} onError={setErr} />
                 ))}
               </div>
             </Card>
@@ -130,7 +159,8 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
             {reports.map((r) => (
               <button key={r.id} onClick={() => refreshOpen(r.id)}
                 className="block w-full rounded-xl border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-gray-300 hover:shadow">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <ProjectPill project={byKey[r.project!]} />
                   <Badge tone={r.status}>{r.status}</Badge>
                   <span className="font-medium text-gray-900">{agentLabels?.[r.agent] || r.agent}</span>
                   <span className="text-xs text-gray-500">{fmtAgo(r.created)}</span>
@@ -151,20 +181,34 @@ export function KitReports({ base = '/api/kit', agentLabels }: {
   )
 }
 
-function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels }: {
+function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project }: {
   api: KitApi; report: Report; onBack: () => void; onChanged: () => void
   onError: (e: string) => void
   agentLabels?: Record<string, string>
+  project?: ProjectTag
 }) {
   const [showRaw, setShowRaw] = React.useState(false)
+  // In fleet mode the id is namespaced ("homeflix:23"); show the project as a pill and the
+  // number the project itself would show, rather than repeating the key inside the heading.
+  const shown = report.local_id ?? report.id
   return (
     <div className="space-y-4">
       <button onClick={onBack} className="text-sm text-blue-600 hover:underline">← All reports</button>
 
-      <Card title={`${agentLabels?.[report.agent] || report.agent} · report #${report.id}`}
+      <Card title={`${agentLabels?.[report.agent] || report.agent} · report #${shown}`}
         subtitle={`${fmtAgo(report.created)} · ${report.duration_sec}s`}
-        right={<Badge tone={report.status}>{report.status}</Badge>}>
+        right={<div className="flex items-center gap-2">
+          <ProjectPill project={project} />
+          <Badge tone={report.status}>{report.status}</Badge>
+        </div>}>
         {report.summary && <p className="text-sm text-gray-700">{report.summary}</p>}
+        {project?.url && (
+          <p className="mt-2 text-xs">
+            <a href={project.url} className="text-blue-600 hover:underline">
+              open {project.label} ↗
+            </a>
+          </p>
+        )}
       </Card>
 
       {(report.findings || []).length > 0 && (
@@ -192,6 +236,7 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels }: 
             {report.items!.map((it) => (
               <ItemRow key={it.id} api={api} item={it} onChanged={onChanged} onError={onError} />
             ))}
+            {/* no project pill here: the whole detail view is already one project's report */}
           </div>
         </Card>
       )}
@@ -208,8 +253,9 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels }: 
   )
 }
 
-function ItemRow({ api, item, onChanged, onError }: {
+function ItemRow({ api, item, onChanged, onError, project }: {
   api: KitApi; item: ReportItem; onChanged: () => void; onError: (e: string) => void
+  project?: ProjectTag
 }) {
   const [answer, setAnswer] = React.useState(item.answer || '')
   const [busy, setBusy] = React.useState(false)
@@ -224,6 +270,7 @@ function ItemRow({ api, item, onChanged, onError }: {
     <div className={cx('rounded-lg border p-3',
       settled ? 'border-gray-100 bg-gray-50' : 'border-amber-200 bg-amber-50/40')}>
       <div className="flex flex-wrap items-center gap-2">
+        <ProjectPill project={project} />
         <Badge tone={item.kind === 'proposal' ? 'warn' : 'info'}>{item.kind}</Badge>
         <Badge tone={item.status}>{item.status}</Badge>
         {item.agent && <span className="text-xs text-gray-400">from {item.agent}</span>}
@@ -257,6 +304,62 @@ function ItemRow({ api, item, onChanged, onError }: {
             </>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+/** Which project a row belongs to. Renders nothing outside fleet mode, so every call site can
+ *  place one unconditionally instead of guarding. The colour is per-project data, not a theme
+ *  token, so it is inline rather than a Tailwind class. */
+function ProjectPill({ project }: { project?: ProjectTag }) {
+  if (!project) return null
+  const c = project.color
+  return (
+    <span
+      className={cx('inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium',
+        !c && 'border-gray-200 text-gray-600')}
+      style={c ? { borderColor: c, color: c } : undefined}
+      title={`project: ${project.label}`}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: c || '#9ca3af' }} />
+      {project.label}
+    </span>
+  )
+}
+
+/** The filter along the top. Chips rather than a <select>: with a handful of projects the whole
+ *  fleet is visible at a glance, and the active one is obvious. */
+function ProjectFilter({ projects, value, onChange }: {
+  projects: ProjectTag[]; value: string | null; onChange: (key: string | null) => void
+}) {
+  const chip = (active: boolean) => cx(
+    'rounded-full border px-3 py-1 text-sm font-medium transition',
+    active ? 'border-gray-900 bg-gray-900 text-white'
+      : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50')
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <button className={chip(!value)} onClick={() => onChange(null)}>All projects</button>
+      {projects.map((p) => (
+        <button key={p.key} className={chip(value === p.key)} onClick={() => onChange(p.key)}>
+          <span className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full align-middle"
+            style={{ background: p.color || '#9ca3af' }} />
+          {p.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** Neutral counterpart to ErrorNote — for "this worked, here is what happened" messages that are
+ *  not errors and would be a lie in red. */
+function Notice({ text, onDismiss }: { text?: string | null; onDismiss?: () => void }) {
+  if (!text) return null
+  return (
+    <div className="mb-3 flex items-start justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+      <span className="whitespace-pre-wrap break-words">{text}</span>
+      {onDismiss && (
+        <button onClick={onDismiss} className="shrink-0 text-blue-500 hover:text-blue-700" aria-label="Dismiss">×</button>
       )}
     </div>
   )

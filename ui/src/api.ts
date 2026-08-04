@@ -57,9 +57,25 @@ export type Finding = {
   action?: string
 }
 
-export type ReportItem = {
-  id: number
-  report_id: number
+/** Row id. A single app's API numbers its rows; a fleet API (claudekit.fleet) addresses rows
+ *  across several projects and so uses "<project>:<id>". Ids are only ever passed back, never
+ *  arithmetic, so both work everywhere. */
+export type RowId = number | string
+
+/** Fields a fleet API adds to every row so the UI can say which project it came from.
+ *  Absent on a single-app API — code that renders them must treat them as optional. */
+export type ProjectTagged = {
+  project?: string
+  project_label?: string
+  project_url?: string
+  project_color?: string
+  /** The row's id within its own project, before it was namespaced. */
+  local_id?: number
+}
+
+export type ReportItem = ProjectTagged & {
+  id: RowId
+  report_id: RowId
   kind: 'question' | 'proposal'
   text: string
   status: 'open' | 'answered' | 'approved' | 'rejected' | 'done'
@@ -68,8 +84,8 @@ export type ReportItem = {
   agent?: string
 }
 
-export type Report = {
-  id: number
+export type Report = ProjectTagged & {
+  id: RowId
   created: number
   agent: string
   status: string
@@ -80,6 +96,34 @@ export type Report = {
   open_items?: number
   items?: ReportItem[]
   detail?: string
+}
+
+/** One project in a fleet — GET {base}/projects. `ok: false` means its database could not be
+ *  read; the row is still listed, because a broken project is exactly what you want to see. */
+export type FleetProject = {
+  key: string
+  label: string
+  db?: string
+  url?: string
+  color?: string
+  ok: boolean
+  error?: string | null
+  reports: number
+  open_items: number
+  pending_action?: number
+  last_report?: number | null
+}
+
+/** What POST {base}/reports/apply returns. A single app starts the apply agent itself and returns
+ *  a `job` to poll; a fleet cannot run another project's agent, so it queues a run request per
+ *  project and describes it in `note`. */
+export type ApplyResult = {
+  ok: boolean
+  job?: number
+  skipped?: string
+  note?: string
+  queued?: { project: string; project_label?: string; task: string; items: number[] }[]
+  failed?: { project: string; error: string }[]
 }
 
 export type ServiceInfo = {
@@ -147,13 +191,29 @@ export class KitApi {
     this.req<any>(`/agent_history/${encodeURIComponent(agent)}/${encodeURIComponent(file)}`)
 
   // reports
-  reports = (limit = 30) => this.req<Report[]>(`/reports?limit=${limit}`)
-  openItems = () => this.req<ReportItem[]>('/reports/open')
-  report = (id: number) => this.req<Report>(`/reports/${id}`)
-  answer = (itemId: number, answer: string) => this.post<ReportItem>(`/reports/item/${itemId}/answer`, { answer })
-  decide = (itemId: number, approved: boolean, note = '') =>
+  //
+  // `project` is only meaningful against a fleet API, where it narrows the merged list to one
+  // project; a single-app API ignores the unknown query parameter, so the same client serves both.
+  private qs = (params: Record<string, string | number | null | undefined>) => {
+    const q = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) if (v !== null && v !== undefined) q.set(k, String(v))
+    const s = q.toString()
+    return s ? `?${s}` : ''
+  }
+
+  reports = (limit = 30, project?: string | null) =>
+    this.req<Report[]>(`/reports${this.qs({ limit, project })}`)
+  openItems = (project?: string | null) =>
+    this.req<ReportItem[]>(`/reports/open${this.qs({ project })}`)
+  report = (id: RowId) => this.req<Report>(`/reports/${id}`)
+  answer = (itemId: RowId, answer: string) => this.post<ReportItem>(`/reports/item/${itemId}/answer`, { answer })
+  decide = (itemId: RowId, approved: boolean, note = '') =>
     this.post<ReportItem>(`/reports/item/${itemId}/decide`, { approved, note })
-  applyDecisions = () => this.post<{ ok: boolean; job?: number; skipped?: string }>('/reports/apply')
+  applyDecisions = (project?: string | null) =>
+    this.post<ApplyResult>(`/reports/apply${this.qs({ project })}`)
+
+  // fleet (claudekit.fleet hosts only)
+  fleetProjects = () => this.req<FleetProject[]>('/projects')
 
   // scheduler
   schedule = () => this.req<{ alive: boolean; tasks: Task[] }>('/schedule')
