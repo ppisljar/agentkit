@@ -42,8 +42,8 @@ Fixes do not flow between them.
    *column-identical* to `reports` and `report_questions` (same names, same `kind` question/proposal
    split) — a plain `INSERT ... SELECT` each. `agent_config` → `ck_agent_config` gains an `hour`
    column that HomeFlix keeps in `schedule_meta`, so that has to be folded in. `schedule_source` →
-   `ck_schedule_task` needs a `kind` ('adapter'/'agent') derived from `BUILTIN_TASKS` membership,
-   and **drops `last_new_count`** (see 3). Rehearse on a copy of `app.db`.
+   `ck_schedule_task` needs a `kind` ('adapter'/'agent') derived from `BUILTIN_TASKS` membership;
+   `last_new_count` now carries across unchanged (see 3). Rehearse on a copy of `app.db`.
 
 2. **Route paths (minor).** The blueprint serves `/api/kit/*`, which cannot collide with HomeFlix's
    own `/api/*`. And `KitSettings`/`KitReports` already call `/api/kit` via the kit's own client, so
