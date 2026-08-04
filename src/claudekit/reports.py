@@ -162,9 +162,25 @@ def decide(store: Store, item_id: int, approved: bool, note: str = "") -> dict |
 
 
 def thread(store: Store, report_id: int) -> list[dict]:
-    """The follow-up conversation on a report, oldest first."""
-    return [dict(r) for r in store.query(
-        "SELECT * FROM ck_report_messages WHERE report_id=? ORDER BY id", (report_id,))]
+    """The follow-up conversation on a report, oldest first.
+
+    `findings` is stored as a JSON string and MUST be parsed here, the way _report_row does for a
+    report's own. Returning the raw string handed the UI something it iterated over — one crashed
+    render took down the whole page.
+    """
+    out = []
+    for r in store.query("SELECT * FROM ck_report_messages WHERE report_id=? ORDER BY id",
+                         (report_id,)):
+        d = dict(r)
+        if d.get("findings"):
+            try:
+                d["findings"] = json.loads(d["findings"])
+            except Exception:  # noqa: BLE001
+                d["findings"] = []
+        if not isinstance(d.get("findings"), list):
+            d["findings"] = []
+        out.append(d)
+    return out
 
 
 def add_message(store: Store, report_id: int, role: str, text: str, *, agent: str | None = None,

@@ -188,6 +188,24 @@ def test_reply_block_is_parsed_not_discarded(kit, monkeypatch):  # noqa: F811
     assert items["proposal"]["text"] == "drop sihq"
 
 
+def test_thread_findings_come_back_as_a_list(kit, monkeypatch):  # noqa: F811
+    """findings is stored as a JSON string; thread() must parse it. Returning the raw string handed
+    the UI something it iterated over, and the failed render took down the entire page."""
+    def _reply(cfg, spec, prompt=None, timeout=None, resume=None):
+        return {"stdout": "", "returncode": 0, "session": "s", "transcript": None,
+                "duration_sec": 1,
+                "result": 'ok\n\n```json\n{"findings":[{"area":"a","title":"t"}]}\n```'}
+
+    monkeypatch.setattr(agent_run, "run", _reply)
+    rid = _report(kit)
+    _settle(kit, followup.ask(kit.cfg, kit.store, rid, "q")["message_id"])
+
+    msgs = reports.thread(kit.store, rid)
+    for m in msgs:                       # EVERY row, including the user turn that has none
+        assert isinstance(m["findings"], list), f"{m['role']}: {type(m['findings'])}"
+    assert msgs[1]["findings"][0]["title"] == "t"
+
+
 def test_a_deliberate_json_answer_is_kept(kit, monkeypatch):  # noqa: F811
     """Only a trailing block that PARSES is dropped — an answer that shows you JSON on purpose,
     or explains some, must survive."""

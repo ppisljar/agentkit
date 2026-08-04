@@ -339,9 +339,10 @@ function FollowUp({ api, report, project, onError, agentLabels }: {
                 ? <span className="text-gray-500"><Spinner /> thinking…</span>
                 : <Markdown text={m.text} />}
               {/* the reply's json block, parsed: findings render like a report's own */}
-              {(m.findings || []).length > 0 && (
+              {/* defensive: a malformed field must never take the whole page down with it */}
+              {Array.isArray(m.findings) && m.findings.length > 0 && (
                 <ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-gray-600">
-                  {(m.findings || []).map((f, i) => <li key={i}>{findingText(f)}</li>)}
+                  {m.findings.map((f, i) => <li key={i}>{findingText(f)}</li>)}
                 </ul>
               )}
             </div>
