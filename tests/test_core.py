@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -221,6 +222,39 @@ def test_run_request_works_on_disabled_task(kit):
     assert kit.scheduler.get('scraper')['enabled'] == 0
     kit.scheduler.request_run('scraper')
     assert 'scraper' in kit.scheduler.due()
+
+
+def test_running_is_visible_from_another_process(kit):
+    """A run started by the DAEMON must read as running in the WEB process.
+
+    `_running` only ever holds the runs a given Scheduler started itself, so in the split
+    deployment every task looked idle in the web process no matter how busy the daemon was — the
+    UI's 'Run now' did the work but never showed it. The shared job row is the cross-process
+    signal, so tasks() reads that too.
+    """
+    from claudekit.scheduler import Scheduler
+
+    web = Scheduler(kit.cfg, kit.store)               # a second instance = the other process
+    assert not web._running
+
+    def running_flag():
+        return next(t for t in web.tasks() if t['task'] == 'scraper')['running']
+
+    assert running_flag() is False
+    jid = jobs.create(kit.store, 'adapter', 'adapter:scraper', {'task': 'scraper'})
+    assert running_flag() is True
+
+    jobs.update(kit.store, jid, status='done')
+    assert running_flag() is False
+
+
+def test_orphaned_job_stops_pinning_a_task_as_running(kit):
+    """A daemon killed mid-run leaves status='running' behind forever; that must not make the task
+    permanently un-runnable in the UI."""
+    jid = jobs.create(kit.store, 'adapter', 'adapter:scraper', {'task': 'scraper'})
+    kit.store.execute("UPDATE ck_jobs SET updated=? WHERE id=?",
+                      (time.time() - jobs.STALE_SEC - 60, jid))
+    assert 'scraper' not in jobs.running_tasks(kit.store)
 
 
 def test_request_run_unknown_task(kit):

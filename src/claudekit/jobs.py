@@ -78,6 +78,30 @@ def running(store: Store, kind: str) -> dict | None:
     return None
 
 
+def running_tasks(store: Store) -> set[str]:
+    """Scheduler task names with a live job right now, read from the DB rather than from memory.
+
+    A Scheduler only knows about the runs IT started (`_running`), which is wrong whenever the loop
+    lives in a separate process from the web app — the standard split deployment. There the web
+    process asks for a run by setting `run_requested`, the daemon picks it up, and the web process
+    then has no idea anything is in flight, so every task looks idle. The job row is the one piece
+    of run state both processes share, so ask it.
+
+    Applies the same stale->interrupted rule as the rest of this module, so a job orphaned by a
+    crashed daemon stops being reported as running instead of pinning a task forever.
+    """
+    out: set[str] = set()
+    for r in store.query("SELECT * FROM ck_jobs WHERE status='running' "
+                         "ORDER BY created DESC LIMIT 200"):
+        j = _row(r)
+        if j.get("status") != "running":
+            continue
+        task = (j.get("params") or {}).get("task")
+        if task:
+            out.add(str(task))
+    return out
+
+
 def run_bg(store: Store, kind: str, label: str, params: dict,
            fn: Callable[[int, dict], None]) -> int:
     """Create a job and run `fn(job_id, params)` in a daemon thread. Returns the id immediately."""

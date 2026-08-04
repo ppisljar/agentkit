@@ -91,10 +91,14 @@ class Scheduler:
 
     def tasks(self) -> list[dict]:
         self._ensure_synced()
+        # Union, not just `_running`: this Scheduler may not be the one running the loop (web
+        # process vs. daemon), and then `_running` is empty however busy the system is. See
+        # jobs.running_tasks.
+        live = set(self._running) | jobs.running_tasks(self.store)
         out = []
         for r in self.store.query("SELECT * FROM ck_schedule_task ORDER BY kind, task"):
             d = dict(r)
-            d["running"] = d["task"] in self._running
+            d["running"] = d["task"] in live
             if d["kind"] == "agent":
                 spec = self.cfg.agents.get(d["task"])
                 d["label"] = spec.label if spec else d["task"]
