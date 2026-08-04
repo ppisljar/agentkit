@@ -57,13 +57,20 @@ def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
     return rid
 
 
-def add_items(store: Store, rid: int, payload: dict | None) -> int:
+def add_items(store: Store, rid: int, payload: dict | None,
+              message_id: int | None = None) -> int:
     """Turn a payload's questions/proposals into open items on report `rid`. Returns how many.
 
     Shared with the follow-up path: an agent answering a question still ends with its json block,
     and that block can raise NEW questions and proposals. Those are as real as the ones a scheduled
     run raises and must reach the same answer/approve loop — dropping them would silently lose a
     question the agent asked you.
+
+    `message_id` records WHICH reply raised it. Without that link an item raised mid-conversation
+    is indistinguishable from one the original run raised, so it can only be rendered detached from
+    the exchange that produced it — which is exactly how it went wrong: a question asked in reply to
+    a follow-up surfaced in the page-level inbox, above the report, with no visible connection to
+    the answer it came from.
     """
     now = time.time()
     n = 0
@@ -72,9 +79,10 @@ def add_items(store: Store, rid: int, payload: dict | None) -> int:
             text = entry if isinstance(entry, str) else json.dumps(entry)
             if text and text.strip():
                 store.execute(
-                    """INSERT INTO ck_report_items (report_id, created, kind, text, status)
-                       VALUES (?,?,?,?,'open')""",
-                    (rid, now, kind, text.strip()))
+                    """INSERT INTO ck_report_items (report_id, created, kind, text, status,
+                                                    message_id)
+                       VALUES (?,?,?,?,'open',?)""",
+                    (rid, now, kind, text.strip(), message_id))
                 n += 1
     return n
 
@@ -120,7 +128,10 @@ def get(store: Store, rid: int) -> dict | None:
             d["findings"] = json.loads(d["findings"])
         except Exception:  # noqa: BLE001
             d["findings"] = []
-    d["items"] = items(store, rid)
+    # Only the items this report's OWN run raised. Ones a follow-up reply raised are rendered by
+    # the thread, next to the answer that raised them; listing them here too showed the same
+    # question twice in one card, detached from its context in one of the two places.
+    d["items"] = report_items(store, rid, own_only=True)
     # recent() carries this, so the detail view lacking it was an asymmetry a consumer would trip
     # on — "the list told me 2 open, the report itself doesn't say".
     d["open_items"] = _count_open(store, rid)
@@ -168,6 +179,11 @@ def thread(store: Store, report_id: int) -> list[dict]:
     report's own. Returning the raw string handed the UI something it iterated over — one crashed
     render took down the whole page.
     """
+    by_msg: dict[int, list[dict]] = {}
+    for it in store.query("SELECT * FROM ck_report_items WHERE report_id=? AND "
+                          "message_id IS NOT NULL ORDER BY id", (report_id,)):
+        by_msg.setdefault(int(it["message_id"]), []).append(dict(it))
+
     out = []
     for r in store.query("SELECT * FROM ck_report_messages WHERE report_id=? ORDER BY id",
                          (report_id,)):
@@ -179,8 +195,19 @@ def thread(store: Store, report_id: int) -> list[dict]:
                 d["findings"] = []
         if not isinstance(d.get("findings"), list):
             d["findings"] = []
+        # the questions/proposals THIS reply raised, so they can be answered where they were asked
+        d["items"] = by_msg.get(int(d["id"]), [])
         out.append(d)
     return out
+
+
+def report_items(store: Store, report_id: int, own_only: bool = False) -> list[dict]:
+    """Items on a report. `own_only` excludes ones raised by a follow-up reply, which the thread
+    renders itself — otherwise the same question appears twice in one report card."""
+    sql = "SELECT * FROM ck_report_items WHERE report_id=?"
+    if own_only:
+        sql += " AND message_id IS NULL"
+    return [dict(r) for r in store.query(sql + " ORDER BY id", (report_id,))]
 
 
 def add_message(store: Store, report_id: int, role: str, text: str, *, agent: str | None = None,
@@ -195,13 +222,15 @@ def add_message(store: Store, report_id: int, role: str, text: str, *, agent: st
 
 
 def finish_message(store: Store, msg_id: int, text: str, *, session: str | None = None,
-                   status: str = "done", findings: list | None = None) -> None:
+                   status: str = "done", findings: list | None = None,
+                   rstatus: str | None = None, summary: str | None = None) -> None:
     """Fill in an agent reply once its run returns (it is inserted 'running' so the thread shows
     the question immediately rather than swallowing it for the minutes the agent takes)."""
     store.execute(
         "UPDATE ck_report_messages SET text=?, session=COALESCE(?, session), status=?, "
-        "findings=? WHERE id=?",
-        (text, session, status, json.dumps(findings) if findings else None, int(msg_id)))
+        "findings=?, rstatus=?, summary=? WHERE id=?",
+        (text, session, status, json.dumps(findings) if findings else None,
+         rstatus, summary, int(msg_id)))
 
 
 def last_session(store: Store, report_id: int) -> str | None:

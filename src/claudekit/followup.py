@@ -124,12 +124,16 @@ def ask(cfg, store: Store, report_id: int, question: str, *, agent: str | None =
             res = agent_run.run(cfg, spec, prompt=prompt, resume=sid)
             ok = res["returncode"] == 0
             prose, payload = split_report_block(res["result"])
-            # The reply's json block is a real report payload: raise its questions and proposals as
-            # open items on this report, so they reach the same answer/approve loop as any other.
-            raised = reports.add_items(store, report_id, payload)
+            # The reply's json block is a real report payload. Its questions and proposals become
+            # open items tagged with THIS message, so they are answered next to the answer that
+            # raised them rather than floating up detached; its verdict and summary are kept too,
+            # because a reply that says "warn" is telling you something the prose alone does not.
+            raised = reports.add_items(store, report_id, payload, message_id=msg_id)
             reports.finish_message(store, msg_id, prose or "(no output)",
                                    session=res["session"], status="done" if ok else "error",
-                                   findings=(payload or {}).get("findings"))
+                                   findings=(payload or {}).get("findings"),
+                                   rstatus=(payload or {}).get("status"),
+                                   summary=(payload or {}).get("summary"))
             jobs.update(store, job_id, status="done" if ok else "error",
                         result={"message": msg_id, "session": res["session"], "items": raised},
                         log=(res["result"] or "")[-20000:])

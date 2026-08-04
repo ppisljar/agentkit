@@ -97,6 +97,12 @@ export type ThreadMessage = {
   status?: 'running' | 'done' | 'error'
   /** the reply's json block, parsed — same shape as a report's own findings */
   findings?: Finding[]
+  /** questions/proposals THIS reply raised: answered inline in the thread, next to the answer
+   *  that raised them, rather than surfacing detached in the page-level inbox. */
+  items?: ReportItem[]
+  /** the reply's own verdict (ok|warn|fail) — the prose alone doesn't convey it */
+  rstatus?: string
+  summary?: string
 }
 export type AskResult = { ok: boolean; message_id?: number; job?: number; agent?: string; resumed?: boolean; error?: string }
 

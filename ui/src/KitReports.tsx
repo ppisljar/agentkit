@@ -334,6 +334,8 @@ function FollowUp({ api, report, project, onError, agentLabels }: {
                 {m.role === 'user' ? 'You' : (agentLabels?.[m.agent || ''] || m.agent)}
                 {' · '}{fmtAgo(m.created)}
                 {m.status === 'error' && <span className="ml-2"><Badge tone="red">failed</Badge></span>}
+                {m.rstatus && m.rstatus !== 'ok' && (
+                  <span className="ml-2"><Badge tone={m.rstatus}>{m.rstatus}</Badge></span>)}
               </div>
               {m.status === 'running'
                 ? <span className="text-gray-500"><Spinner /> thinking…</span>
@@ -345,6 +347,13 @@ function FollowUp({ api, report, project, onError, agentLabels }: {
                   {m.findings.map((f, i) => <li key={i}>{findingText(f)}</li>)}
                 </ul>
               )}
+              {/* questions/proposals THIS reply raised, answerable where they were asked */}
+              {Array.isArray(m.items) && m.items.map((it) => (
+                <div key={it.id} className="mt-2">
+                  <ItemRow api={api} item={it} project={project} onChanged={load}
+                    onError={onError} />
+                </div>
+              ))}
             </div>
           ))}
         </div>

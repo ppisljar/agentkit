@@ -206,6 +206,40 @@ def test_thread_findings_come_back_as_a_list(kit, monkeypatch):  # noqa: F811
     assert msgs[1]["findings"][0]["title"] == "t"
 
 
+def test_reply_items_belong_to_the_reply_not_the_report(kit, monkeypatch):  # noqa: F811
+    """A question raised mid-conversation must be answerable WHERE IT WAS ASKED.
+
+    Tagged only with the report, it was indistinguishable from one the original run raised: it
+    surfaced in the page-level "needs your input" block above the report, with no visible link to
+    the answer it came from, and appeared a second time in the report's own item list.
+    """
+    def _reply(cfg, spec, prompt=None, timeout=None, resume=None):
+        return {"stdout": "", "returncode": 0, "session": "s", "transcript": None,
+                "duration_sec": 1,
+                "result": 'done\n\n```json\n{"status":"warn","summary":"could not finish",'
+                          '"findings":[{"area":"a","title":"t"}],'
+                          '"questions":["contact the tracker?"]}\n```'}
+
+    monkeypatch.setattr(agent_run, "run", _reply)
+    rid = _report(kit, agent="healthcheck")          # the report's OWN run raises one too
+    reports.add_items(kit.store, rid, {"questions": ["an original question"]})
+    mid = followup.ask(kit.cfg, kit.store, rid, "why?")["message_id"]
+    _settle(kit, mid)
+
+    reply = reports.thread(kit.store, rid)[1]
+    assert [i["text"] for i in reply["items"]] == ["contact the tracker?"]
+    assert reply["rstatus"] == "warn"                 # the verdict survives, not just the prose
+    assert reply["summary"] == "could not finish"
+    assert reply["findings"][0]["title"] == "t"
+
+    # the report card shows ONLY its own — the reply renders its own, so no duplication
+    own = [i["text"] for i in reports.get(kit.store, rid)["items"]]
+    assert own == ["an original question"]
+
+    # ...but it is still a real open item, so the page-level inbox still surfaces it
+    assert "contact the tracker?" in [i["text"] for i in reports.open_items(kit.store)]
+
+
 def test_a_deliberate_json_answer_is_kept(kit, monkeypatch):  # noqa: F811
     """Only a trailing block that PARSES is dropped — an answer that shows you JSON on purpose,
     or explains some, must survive."""

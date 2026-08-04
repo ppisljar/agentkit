@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS ck_report_items (
   text TEXT,
   status TEXT DEFAULT 'open',       -- open | answered | approved | rejected | done
   answer TEXT, answered_at REAL,
+  -- Set when a FOLLOW-UP reply raised this, rather than the report's own run. Without it an item
+  -- raised mid-conversation had no link back to the reply that raised it, so it could only be
+  -- shown detached from the exchange that produced it.
+  message_id INTEGER,
   FOREIGN KEY (report_id) REFERENCES ck_reports(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS ix_ck_items_status ON ck_report_items(status);
@@ -45,8 +49,10 @@ CREATE TABLE IF NOT EXISTS ck_report_messages (
   agent TEXT,                       -- which agent answered (may differ from the report's author)
   session TEXT,                     -- the run's session id, so the NEXT follow-up can resume it
   job_id INTEGER,                   -- ck_jobs row while it runs, so the UI can poll and show a log
-  status TEXT DEFAULT 'done',       -- running | done | error
+  status TEXT DEFAULT 'done',       -- running | done | error (of the RUN, not of its verdict)
   findings TEXT,                    -- the reply's json block, parsed: same shape as ck_reports
+  rstatus TEXT,                     -- the reply's own verdict: ok | warn | fail
+  summary TEXT,                     -- the reply's one-line summary, if it gave one
   FOREIGN KEY (report_id) REFERENCES ck_reports(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS ix_ck_msgs_report ON ck_report_messages(report_id, id);
@@ -89,7 +95,8 @@ _ADDED_COLUMNS = {
     # follow-up: the session id used to survive only in ck_jobs.result for kit-run agents, and not
     # at all for wrapper-script agents, so there was nothing to resume from.
     "ck_reports": {"session": "TEXT"},
-    "ck_report_messages": {"findings": "TEXT"},
+    "ck_report_messages": {"findings": "TEXT", "rstatus": "TEXT", "summary": "TEXT"},
+    "ck_report_items": {"message_id": "INTEGER"},
 }
 
 
