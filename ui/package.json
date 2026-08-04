@@ -1,0 +1,11 @@
+{
+  "name": "@claudekit/ui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared React components for claudeKit hosts (reports, settings, transcripts).",
+  "//": "These components are consumed by SOURCE from each host's bundler, so nothing is built here. The dependencies exist purely so TypeScript can resolve React when a host typechecks files at this path: without a node_modules alongside them, tsc walking up from ui/src finds nothing and every JSX tag collapses into an implicit-any cascade in the HOST's build.",
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "react": "^18.2.0"
+  }
+}

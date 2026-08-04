@@ -18,7 +18,8 @@ import { Badge, Button, Card, Empty, ErrorNote, LogBox, Markdown, Spinner, cx } 
 /** A project the reports may belong to. `key` is what the API filters on. */
 export type ProjectTag = { key: string; label: string; color?: string; url?: string }
 
-export function KitReports({ base = '/api/kit', agentLabels, projects, title, subtitle }: {
+export function KitReports({ base = '/api/kit', agentLabels, projects, title, subtitle,
+                            onRunNow, runNowLabel }: {
   base?: string
   /** Optional agent-id -> display name, so rows read "Daily health check" rather than "selfcheck".
    *  Left to the host because the kit doesn't know which of an app's agents deserve friendlier
@@ -29,6 +30,11 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
   projects?: ProjectTag[]
   title?: React.ReactNode
   subtitle?: React.ReactNode
+  /** Kick off a run from this page. The kit has no opinion about WHICH agent a host considers
+   *  "the" report producer — HomeFlix means selfcheck, another app might mean something else — so
+   *  the host supplies the action and the label, and the button simply isn't rendered without it. */
+  onRunNow?: () => Promise<unknown> | void
+  runNowLabel?: string
 }) {
   const api = React.useMemo(() => new KitApi(base), [base])
   const [reports, setReports] = React.useState<Report[]>([])
@@ -77,8 +83,22 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
   }
 
   const actionable = pending.length
-  const readyToApply = React.useMemo(
-    () => reports.some((r) => r.open_items === 0) || pending.length === 0, [reports, pending])
+
+  const [running, setRunning] = React.useState(false)
+  const runNow = async () => {
+    if (!onRunNow) return
+    setRunning(true)
+    try {
+      await onRunNow()
+      // An agent takes minutes; reload so its "running" state and eventual report appear without
+      // the reader having to guess when to refresh.
+      setTimeout(load, 2000)
+    } catch (e: any) {
+      setErr(e.message)
+    } finally {
+      setRunning(false)
+    }
+  }
 
   const apply = async () => {
     setApplying(true)
@@ -106,6 +126,9 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
         </div>
         <div className="flex items-center gap-2">
           {actionable > 0 && <Badge tone="open">{actionable} waiting on you</Badge>}
+          {onRunNow && (
+            <Button onClick={runNow} loading={running}>{runNowLabel || 'Run now'}</Button>
+          )}
           <Button variant="primary" onClick={apply} loading={applying}>Apply approved</Button>
         </div>
       </div>

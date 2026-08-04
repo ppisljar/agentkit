@@ -40,9 +40,9 @@ type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
 export function Button({ variant = 'default', loading, className, children, disabled, ...rest }: BtnProps) {
   const base = 'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition disabled:opacity-50 disabled:cursor-not-allowed'
   const styles = {
-    primary: 'bg-blue-600 text-white hover:bg-blue-700',
+    primary: 'bg-blue-600 text-onaccent hover:bg-blue-700',
     default: 'border border-gray-300 bg-white text-gray-700 hover:bg-gray-50',
-    danger: 'bg-red-600 text-white hover:bg-red-700',
+    danger: 'bg-red-600 text-onaccent hover:bg-red-700',
     ghost: 'text-gray-600 hover:bg-gray-100',
   }[variant]
   return (
