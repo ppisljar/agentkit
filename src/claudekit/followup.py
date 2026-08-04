@@ -105,7 +105,11 @@ def ask(cfg, store: Store, report_id: int, question: str, *, agent: str | None =
             jobs.update(store, job_id, status="error", error=str(e))
             raise
 
+    # `task` is what jobs.running_tasks() reads to decide which scheduler task is busy, and it is
+    # how the UI knows an agent is working. Without it a follow-up ran completely invisibly: the
+    # agent showed idle on the Settings page while it was editing files, so nothing warned you off
+    # touching the same ones.
     job = jobs.run_bg(store, "agent", f"followup:{name}#{report_id}",
-                      {"report": report_id, "message": msg_id}, _work)
+                      {"task": name, "report": report_id, "message": msg_id}, _work)
     store.execute("UPDATE ck_report_messages SET job_id=? WHERE id=?", (job, msg_id))
     return {"ok": True, "message_id": msg_id, "job": job, "agent": name, "resumed": bool(sid)}

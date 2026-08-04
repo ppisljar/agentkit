@@ -138,6 +138,29 @@ def test_failure_surfaces_in_the_thread(kit, monkeypatch):  # noqa: F811
     assert "claude exploded" in row["text"]
 
 
+def test_a_running_followup_shows_the_agent_as_busy(kit, monkeypatch):  # noqa: F811
+    """A follow-up is a run of that agent, so the schedule must say the agent is running.
+
+    It used to be invisible: the job carried no `task`, which is what jobs.running_tasks() reads,
+    so the Settings page showed the agent idle while it was editing files — nothing warned anyone
+    off touching the same ones.
+    """
+    seen = {}
+
+    def _slow(cfg, spec, prompt=None, timeout=None, resume=None):
+        seen["running"] = {t["task"]: t["running"] for t in kit.scheduler.tasks()}
+        return {"stdout": "", "returncode": 0, "session": "s2", "transcript": None,
+                "duration_sec": 1, "result": "done"}
+
+    monkeypatch.setattr(agent_run, "run", _slow)
+    rid = _report(kit, agent="healthcheck")
+    _settle(kit, followup.ask(kit.cfg, kit.store, rid, "q")["message_id"])
+
+    assert seen["running"]["healthcheck"] is True          # busy DURING the run
+    after = {t["task"]: t["running"] for t in kit.scheduler.tasks()}
+    assert after["healthcheck"] is False                    # and idle once it finishes
+
+
 def test_bad_input_is_rejected(kit, fake_run):  # noqa: F811
     rid = _report(kit)
     assert followup.ask(kit.cfg, kit.store, 9999, "q")["ok"] is False
