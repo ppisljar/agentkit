@@ -470,3 +470,38 @@ def test_report_without_overrides_still_reads_the_payload(kit):
     r = reports.get(kit.store, rid)
     assert (r["status"], r["summary"], r["detail"]) == ("ok", "s", "raw")
     assert len(r["findings"]) == 1
+
+
+# ---------------------------------------------------------------- pre/post hook pair
+
+def test_pre_run_result_is_threaded_to_post_run(kit):
+    """pre+post is the general form; count_items is just the common case with a schema home."""
+    kit.cfg.pre_run = lambda task: {"before": 41}
+    seen = []
+    kit.cfg.post_run = lambda task, status, info: seen.append(info)
+    _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert seen[0]["pre"] == {"before": 41}
+
+
+def test_pre_run_fires_for_agent_scripts_too(kit):
+    kit.cfg.pre_run = lambda task: f"pre:{task}"
+    seen = []
+    kit.cfg.post_run = lambda task, status, info: seen.append(info["pre"])
+    (kit.cfg.root / "p.py").write_text("print('ok')\n", encoding="utf-8")
+    kit.cfg.agents["scripted3"] = AgentSpec(name="scripted3", label="S", description="d",
+                                            system="s", prompt="p", schedule="daily",
+                                            script=["p.py"])
+    kit.scheduler.sync_tasks()
+    _wait(kit, kit.scheduler.run_now("scripted3")["job"])
+    assert "pre:scripted3" in seen, seen
+
+
+def test_broken_pre_run_hook_does_not_fail_the_run(kit):
+    def boom(task):
+        raise RuntimeError("pre exploded")
+    kit.cfg.pre_run = boom
+    seen = []
+    kit.cfg.post_run = lambda task, status, info: seen.append(info["pre"])
+    j = _wait(kit, kit.scheduler.run_now("scraper")["job"])
+    assert j["status"] == "done", j
+    assert seen == [None]

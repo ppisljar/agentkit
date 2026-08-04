@@ -32,7 +32,7 @@ src/claudekit/
 └── http/
     ├── fastapi_router.py
     └── flask_bp.py
-ui/src/             React + Tailwind components (KitSettings, KitReports)
+ui/src/             React + Tailwind components (KitSettings, KitReports, KitTranscript)
 ```
 
 ## Wiring a host app
@@ -61,7 +61,12 @@ Frontend:
 ```tsx
 import { KitSettings } from '@claudekit/KitSettings'
 import { KitReports } from '@claudekit/KitReports'
+
+<KitReports agentLabels={{ selfcheck: 'Daily health check' }} />
 ```
+
+`KitSettings` embeds `KitTranscripts` per agent: the captured `.jsonl` for each past run, rendered
+as turns with collapsible tool calls and their results. Nothing is fetched until it is opened.
 
 Alias `@claudekit` to `claudeKit/ui/src` in your bundler, and add that path to your Tailwind
 `content` globs or the classes get purged.
@@ -80,7 +85,7 @@ The scheduler then runs `python_bin script...` from the app root and supervises 
 output is streamed into the job log); the script calls `claudekit.agent_run.run()` itself and writes
 its own report. Without `script`, the agent is called directly and its JSON block becomes the report.
 
-## Follow-up work: `post_run`
+## Hooks around a run: `pre_run` / `post_run`
 
 ```python
 def after(task, status, info):
@@ -94,8 +99,12 @@ Fires once for every finished task — adapter, agent and agent-script alike. A 
 logged and swallowed: follow-up work failing must not retroactively mark a scrape that worked as
 failed.
 
-`info` carries `result`, `error`, `duration_sec` and `new_count`. To get `new_count`, tell the kit
-how to count — it cannot know what your adapter scraped:
+`pre_run(task)` runs just before the task; whatever it returns comes back as `info["pre"]`, so a
+host can measure the world either side of a run without the kit knowing what is being measured.
+Both hooks are advisory — one that raises is logged, and never fails or blocks the run.
+
+`info` carries `result`, `error`, `duration_sec`, `new_count` and `pre`. Counting is common enough
+to have a shortcut, because the number needs a home in the schema and the UI:
 
 ```python
 KitConfig(..., count_items=lambda task: db.count(task))

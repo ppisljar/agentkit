@@ -157,6 +157,21 @@ class Scheduler:
         job_id = jobs.run_bg(self.store, kind, label, {"task": task}, _work)
         return {"ok": True, "task": task, "job": job_id}
 
+    def _fire_pre_run(self, task: str):
+        """Host hook run just before a task starts; its return is threaded to post_run.
+
+        Kept advisory in the same way as post_run — a host that can't measure something shouldn't
+        be able to stop the run that was about to happen.
+        """
+        hook = getattr(self.cfg, "pre_run", None)
+        if not callable(hook):
+            return None
+        try:
+            return hook(task)
+        except Exception as e:  # noqa: BLE001
+            log.warning("pre_run hook failed for %s: %s: %s", task, type(e).__name__, e)
+            return None
+
     def count_items(self, task: str) -> int | None:
         """Host's current item count for `task`, or None if it doesn't count this one."""
         fn = getattr(self.cfg, "count_items", None)
@@ -171,7 +186,7 @@ class Scheduler:
 
     def _finish(self, task: str, status: str, started: float,
                 result: str = "", error: str | None = None,
-                new_count: int | None = None) -> None:
+                new_count: int | None = None, pre=None) -> None:
         row = self.get(task) or {}
         nxt = None
         if row.get("kind") == "agent" and row.get("hour") is not None:
@@ -182,10 +197,10 @@ class Scheduler:
             """UPDATE ck_schedule_task SET last_run=?, last_duration_sec=?, last_status=?,
                       last_result=?, last_error=?, next_run=?, last_new_count=? WHERE task=?""",
             (started, int(_now() - started), status, result[:4000], error, nxt, new_count, task))
-        self._fire_post_run(task, status, result, error, started, new_count)
+        self._fire_post_run(task, status, result, error, started, new_count, pre)
 
-    def _fire_post_run(self, task: str, status: str, result: str,
-                       error: str | None, started: float, new_count: int | None = None) -> None:
+    def _fire_post_run(self, task: str, status: str, result: str, error: str | None,
+                       started: float, new_count: int | None = None, pre=None) -> None:
         """Notify the host that a task finished, so it can trigger follow-up work (rebuild a static
         site after a scrape that found new items, reindex a catalog, …).
 
@@ -198,7 +213,8 @@ class Scheduler:
             return
         try:
             hook(task, status, {"result": result, "error": error, "started": started,
-                                "duration_sec": int(_now() - started), "new_count": new_count})
+                                "duration_sec": int(_now() - started),
+                                "new_count": new_count, "pre": pre})
         except Exception as e:  # noqa: BLE001 — a broken hook must not break the scheduler
             log.warning("post_run hook failed for %s: %s: %s", task, type(e).__name__, e)
 
@@ -218,13 +234,14 @@ class Scheduler:
         started = _now()
         # Count around the run so the host can tell whether it actually produced anything. The kit
         # has no idea what an adapter scraped, so the host supplies the count.
+        pre = self._fire_pre_run(task)
         before = self.count_items(task)
         rc = jobs.run_subprocess(self.store, job_id, [*argv, *extra], cwd=str(self.cfg.root),
                                  env=self.cfg.env())
         after = self.count_items(task)
         new_count = max(0, after - before) if (before is not None and after is not None) else None
         self._finish(task, "ok" if rc == 0 else "error", started,
-                     error=None if rc == 0 else f"exit {rc}", new_count=new_count)
+                     error=None if rc == 0 else f"exit {rc}", new_count=new_count, pre=pre)
 
     def _run_agent_script(self, task: str, spec, job_id: int) -> None:
         """Run a host script that owns the whole agent run.
@@ -237,21 +254,23 @@ class Scheduler:
         argv = [self.cfg.python_bin, *spec.script] if isinstance(spec.script, (list, tuple)) \
             else [self.cfg.python_bin, spec.script]
         started = _now()
+        pre = self._fire_pre_run(task)
         rc = jobs.run_subprocess(self.store, job_id, argv, cwd=str(self.cfg.root),
                                  env=self.cfg.env())
         self._finish(task, "ok" if rc == 0 else "error", started,
-                     error=None if rc == 0 else f"exit {rc}")
+                     error=None if rc == 0 else f"exit {rc}", pre=pre)
 
     def _run_agent(self, task: str, job_id: int) -> None:
         started = _now()
         spec = registry.resolve(self.cfg, self.store, task)
         if spec.script:
             return self._run_agent_script(task, spec, job_id)
+        pre = self._fire_pre_run(task)
         try:
             res = agent_run.run(self.cfg, spec)
         except agent_run.AgentError as e:
             jobs.update(self.store, job_id, status="error", error=str(e))
-            self._finish(task, "error", started, error=str(e))
+            self._finish(task, "error", started, error=str(e), pre=pre)
             return
 
         text = res["result"]
@@ -266,7 +285,7 @@ class Scheduler:
                     error=None if ok else f"claude exited {res['returncode']}",
                     log=text[-20000:])
         self._finish(task, (payload or {}).get("status", "ok" if ok else "error"), started,
-                     result=f"report {rid}")
+                     result=f"report {rid}", pre=pre)
 
     # ---------------------------------------------------------------- loop
     def request_run(self, task: str) -> dict:

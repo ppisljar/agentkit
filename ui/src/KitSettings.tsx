@@ -9,6 +9,7 @@ import {
   AgentInfo, ConfigEntry, ConfigFile, Job, KitApi, MASK, ServiceInfo, Task, fmtAgo, fmtIn,
 } from './api'
 import { Badge, Button, Card, Empty, ErrorNote, LogBox, Spinner, Toggle, cx } from './ui'
+import { KitTranscripts } from './KitTranscript'
 
 type Tab = 'scrapers' | 'agents' | 'services' | 'config'
 
@@ -304,6 +305,8 @@ function AgentsPanel({ api }: { api: KitApi }) {
               last run {fmtAgo(t?.last_run)}
               {t?.last_error && <span className="ml-3 text-red-600">error: {t.last_error}</span>}
             </div>
+
+            <KitTranscripts api={api} agent={a.name} />
 
             {editing === a.name && (
               <PromptEditor api={api} agent={a} onSaved={load} onError={setErr} />

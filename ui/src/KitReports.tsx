@@ -10,7 +10,13 @@ import React from 'react'
 import { Job, KitApi, Report, ReportItem, fmtAgo } from './api'
 import { Badge, Button, Card, Empty, ErrorNote, LogBox, Spinner, cx } from './ui'
 
-export function KitReports({ base = '/api/kit' }: { base?: string }) {
+export function KitReports({ base = '/api/kit', agentLabels }: {
+  base?: string
+  /** Optional agent-id -> display name, so rows read "Daily health check" rather than "selfcheck".
+   *  Left to the host because the kit doesn't know which of an app's agents deserve friendlier
+   *  names, and the ids are what the API speaks. */
+  agentLabels?: Record<string, string>
+}) {
   const api = React.useMemo(() => new KitApi(base), [base])
   const [reports, setReports] = React.useState<Report[]>([])
   const [open, setOpen] = React.useState<Report | null>(null)
@@ -100,7 +106,8 @@ export function KitReports({ base = '/api/kit' }: { base?: string }) {
       )}
 
       {open ? (
-        <ReportDetail api={api} report={open} onBack={() => { setOpen(null); load() }}
+        <ReportDetail api={api} report={open} agentLabels={agentLabels}
+          onBack={() => { setOpen(null); load() }}
           onChanged={() => refreshOpen(open.id)} onError={setErr} />
       ) : (
         <>
@@ -125,7 +132,7 @@ export function KitReports({ base = '/api/kit' }: { base?: string }) {
                 className="block w-full rounded-xl border border-gray-200 bg-white p-4 text-left shadow-sm transition hover:border-gray-300 hover:shadow">
                 <div className="flex items-center gap-2">
                   <Badge tone={r.status}>{r.status}</Badge>
-                  <span className="font-medium text-gray-900">{r.agent}</span>
+                  <span className="font-medium text-gray-900">{agentLabels?.[r.agent] || r.agent}</span>
                   <span className="text-xs text-gray-500">{fmtAgo(r.created)}</span>
                   {!!r.open_items && (
                     <span className="ml-auto"><Badge tone="open">{r.open_items} open</Badge></span>
@@ -144,16 +151,17 @@ export function KitReports({ base = '/api/kit' }: { base?: string }) {
   )
 }
 
-function ReportDetail({ api, report, onBack, onChanged, onError }: {
+function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels }: {
   api: KitApi; report: Report; onBack: () => void; onChanged: () => void
   onError: (e: string) => void
+  agentLabels?: Record<string, string>
 }) {
   const [showRaw, setShowRaw] = React.useState(false)
   return (
     <div className="space-y-4">
       <button onClick={onBack} className="text-sm text-blue-600 hover:underline">← All reports</button>
 
-      <Card title={`${report.agent} · report #${report.id}`}
+      <Card title={`${agentLabels?.[report.agent] || report.agent} · report #${report.id}`}
         subtitle={`${fmtAgo(report.created)} · ${report.duration_sec}s`}
         right={<Badge tone={report.status}>{report.status}</Badge>}>
         {report.summary && <p className="text-sm text-gray-700">{report.summary}</p>}

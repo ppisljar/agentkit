@@ -45,29 +45,32 @@ Fixes do not flow between them.
    `ck_schedule_task` needs a `kind` ('adapter'/'agent') derived from `BUILTIN_TASKS` membership,
    and **drops `last_new_count`** (see 3). Rehearse on a copy of `app.db`.
 
-2. **Route compatibility.** The frontend calls `/api/agents`, `/api/reports`, `/api/schedule`; the
-   blueprint serves `/api/kit/*`. Either mount at `/api` or update the frontend. Mounting at `/api`
-   risks colliding with HomeFlix's own routes — check `/api/jobs`, `/api/health`, `/api/config`
-   before choosing.
+2. **Route paths (minor).** The blueprint serves `/api/kit/*`, which cannot collide with HomeFlix's
+   own `/api/*`. And `KitSettings`/`KitReports` already call `/api/kit` via the kit's own client, so
+   adopting them settles it. The only leftovers are HomeFlix screens that call the old paths
+   directly — `SourceCard` and `SchedulerSection` — which just need repointing. Do NOT remount the
+   blueprint at `/api` to avoid that; *that* is what would risk collisions.
 
-3. **Scheduler feature delta.** `ck_schedule_task` has no `last_new_count`, which HomeFlix's Sources
-   UI shows ("+N new") and which gates the `build_site` rebuild. `post_run` now provides the
-   trigger, but the *"did this run produce anything"* signal still has to come from somewhere —
-   probably a convention on adapter exit (stdout marker or exit code), since the kit deliberately
-   knows nothing about what an adapter scraped.
+3. **~~Scheduler feature delta~~ — done.** `last_new_count` is now a column, fed by
+   `KitConfig.count_items` (called around each adapter run) and passed to `post_run` as
+   `info["new_count"]`, which is what gates the `build_site` rebuild. `pre_run`/`post_run` cover
+   anything more involved.
 
 4. **`flask_bp.py` is unexercised.** Route parity with the FastAPI adapter is asserted by a test,
    but no consumer has run its *behaviour*. HomeFlix would be the first; expect rough edges in
    request parsing and error shapes.
 
-5. **Reports UI parity.** HomeFlix's `ReportsTab` renders findings with severity, filters by agent,
-   and has a transcript viewer (`TranscriptViewer.tsx`, which parses the captured `.jsonl` including
-   tool calls and their results). Compare `KitReports` feature-for-feature *before* the swap.
+5. **~~Reports UI parity~~ — done, and HomeFlix gains from it.** Compared feature-for-feature:
+   `KitReports` was already *ahead* (findings as objects with severity badges and detail vs
+   HomeFlix's plain strings; live apply-job polling vs fire-and-forget) and already had the
+   "N open" badge. Added `agentLabels` for friendly agent names, and `KitTranscript.tsx` — the one
+   real gap, since the backend already captured and parsed transcripts but no UI exposed them.
 
-6. **Agent-script reporting shape.** With `AgentSpec.script`, a wrapper writes its own report — but
-   the call has to move from HomeFlix's `reports.add_report(status, summary, detail, findings=…,
-   questions=…)` to `claudekit.reports.save(store, agent, payload, …)`, which takes a parsed payload
-   dict rather than positional fields. Mechanical, but every wrapper touches it.
+6. **Agent-script reporting shape (eased).** `reports.save()` now takes explicit
+   `status`/`summary`/`detail`/`findings` keywords that override the payload, so a wrapper that
+   knows the truth can pass it directly. The rewrite from HomeFlix's
+   `add_report(status, summary, detail, …)` is now argument-shuffling, but every wrapper still
+   touches it — and `questions=`/`proposals=` still have to move into the payload dict.
 
 7. **Prompts carry dev-machine paths.** `agents.py` rewrites `/Users/ppisljar/...` at runtime via
    `_localize()`. On migration, prompts should use kit config values and `_localize()` should go.

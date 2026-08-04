@@ -103,15 +103,19 @@ class KitConfig:
     # time rather than baked into each spec, so it also reaches prompts the user has customised in
     # the UI — a host-wide rule shouldn't be lost the moment someone edits one agent's prompt.
     system_hints: tuple[str, ...] = ()
+    # fn(task) -> Any, called just before a task runs. Whatever it returns is handed back to
+    # post_run as info["pre"], so a host can measure the world before and after a run without the
+    # kit knowing what is being measured (row counts, file sizes, a timestamp to diff against…).
+    pre_run: object | None = None
     # Called after a scheduler task finishes: fn(task, status, info). `info` carries result, error,
-    # duration_sec and new_count. Lets a host trigger follow-up work — e.g. rebuild a static site,
-    # but only when the run actually produced something (see count_items).
+    # duration_sec, new_count and pre. Lets a host trigger follow-up work — e.g. rebuild a static
+    # site, but only when the run actually produced something.
     # Exceptions are logged and swallowed; a failing hook must not fail the task.
     post_run: object | None = None
-    # fn(task) -> int | None: how many items the app holds for `task` right now. Called before and
-    # after an adapter run; the difference is stored as last_new_count and passed to post_run.
-    # The kit cannot know what an adapter scraped, so the host counts — a catalog row count, a file
-    # count, whatever "an item" means to it. Return None to opt out for a given task.
+    # Sugar over pre_run/post_run for the common case: fn(task) -> int | None, the app's item count
+    # for `task` right now. Called around adapter runs; the delta is stored as last_new_count (the
+    # "+N new" the UI shows) and passed to post_run. Anything more involved than a count should use
+    # pre_run/post_run directly — this exists because the count needs a home in the schema.
     count_items: object | None = None
     agent_timeout_sec: int = 2700
     keep_transcripts: int = 60
