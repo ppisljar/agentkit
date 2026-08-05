@@ -46,9 +46,16 @@ function useJob(api: KitApi, jobId: number | null) {
   return job
 }
 
-export function KitSettings({ base = '/api/kit' }: { base?: string }) {
+/** A tab the HOST adds. Some settings are not kit concepts at all — restarting an app's own web
+ *  process, or reloading its backend — and hard-coding them here would put one app's operations
+ *  into every other app's UI. The host supplies the panel; the kit only makes room for it. */
+export type ExtraTab = { id: string; label: string; content: React.ReactNode }
+
+export function KitSettings({ base = '/api/kit', extraTabs = [] }:
+    { base?: string; extraTabs?: ExtraTab[] }) {
   const api = React.useMemo(() => new KitApi(base), [base])
-  const [tab, setTab] = React.useState<Tab>('scrapers')
+  const [tab, setTab] = React.useState<string>('scrapers')
+  const tabs = [...TABS, ...extraTabs.map((t) => ({ id: t.id, label: t.label }))]
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-6">
@@ -58,7 +65,7 @@ export function KitSettings({ base = '/api/kit' }: { base?: string }) {
       </p>
 
       <div className="mb-5 flex gap-1 border-b border-gray-200">
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
@@ -76,6 +83,7 @@ export function KitSettings({ base = '/api/kit' }: { base?: string }) {
       {tab === 'agents' && <AgentsPanel api={api} />}
       {tab === 'services' && <ServicesPanel api={api} />}
       {tab === 'config' && <ConfigPanel api={api} />}
+      {extraTabs.map((t) => t.id === tab && <div key={t.id}>{t.content}</div>)}
     </div>
   )
 }
