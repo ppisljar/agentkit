@@ -9,7 +9,7 @@
 
 import React from 'react'
 import { KitApi, fmtAgo } from './api'
-import { Badge, Button, Empty, Spinner, cx } from './ui'
+import { Badge, Button, Empty, Markdown, Spinner, cx } from './ui'
 
 type ToolCall = { name?: string; input?: unknown; result?: string | null; is_error?: boolean }
 type Msg = { role: string; text?: string; ts?: string; tools?: ToolCall[] }
@@ -48,19 +48,15 @@ function ToolCard({ t }: { t: ToolCall }) {
           {t.input != null && (
             <>
               <div className="text-[10px] uppercase tracking-wide text-gray-400">input</div>
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded bg-white p-1.5 text-[11px] text-gray-700">
-                {pretty(t.input)}
-              </pre>
+              <Payload text={pretty(t.input)} lang={langOf(t.name)} max="max-h-48" />
             </>
           )}
           {t.result != null && (
             <>
               <div className="text-[10px] uppercase tracking-wide text-gray-400">result</div>
-              <pre className={cx(
-                'max-h-64 overflow-auto whitespace-pre-wrap break-words rounded p-1.5 text-[11px]',
-                t.is_error ? 'bg-red-100 text-red-800' : 'bg-white text-gray-700')}>
-                {pretty(t.result)}
-              </pre>
+              {t.is_error
+                ? <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-red-100 p-1.5 text-[11px] text-red-800">{pretty(t.result)}</pre>
+                : <Payload text={pretty(t.result)} max="max-h-64" />}
             </>
           )}
         </div>
@@ -81,9 +77,7 @@ export function Transcript({ messages }: { messages: Msg[] }) {
             <Badge tone={m.role === 'user' ? undefined : 'ok'}>{m.role}</Badge>
             {m.ts && <span className="text-[11px] text-gray-400">{m.ts}</span>}
           </div>
-          {m.text && (
-            <p className="whitespace-pre-wrap break-words text-sm text-gray-800">{m.text}</p>
-          )}
+          {m.text && <Markdown text={m.text} className="break-words" />}
           {!!(m.tools || []).length && (
             <div className="mt-2 space-y-1">
               {m.tools!.map((t, j) => <ToolCard key={j} t={t} />)}
@@ -99,6 +93,52 @@ export function Transcript({ messages }: { messages: Msg[] }) {
  * Collapsible per-agent run history. Nothing is fetched until it's opened, and a transcript is
  * fetched only when its run is expanded — these files reach several MB.
  */
+
+/** A tool's input/result. Syntax-highlighted through the shared Markdown renderer rather than a
+ *  second highlighter setup — a Bash input is a shell script and a Read result is usually source,
+ *  and both are far easier to scan highlighted than as one grey block. */
+function Payload({ text, lang, max }: { text: string; lang?: string; max: string }) {
+  if (!text) return null
+  return (
+    <div className={cx('overflow-auto', max)}>
+      <Markdown text={'```' + (lang || '') + '\n' + text + '\n```'} className="text-[11px]" />
+    </div>
+  )
+}
+
+/** Best-guess language for a tool's input, so the highlighter has something to work with. */
+function langOf(tool?: string): string {
+  const t = (tool || '').toLowerCase()
+  if (t === 'bash') return 'bash'
+  if (t === 'edit' || t === 'write' || t === 'read') return ''   // could be anything; no guess
+  return 'json'
+}
+
+/**
+ * ONE captured run, rendered.
+ *
+ * Split out of KitTranscripts so a report can open the exact conversation that produced it —
+ * previously the only way in was the per-agent history panel, which meant finding the right run by
+ * timestamp, and the report's own link went to raw .jsonl.
+ */
+export function KitTranscript({ api, agent, file }: { api: KitApi; agent: string; file: string }) {
+  const [msgs, setMsgs] = React.useState<Msg[] | null>(null)
+  const [err, setErr] = React.useState<string | null>(null)
+
+  React.useEffect(() => {
+    let alive = true
+    api.transcript(agent, file)
+      .then((r: any) => { if (alive) setMsgs(r.messages || r || []) })
+      .catch((e: any) => { if (alive) setErr(e.message) })
+    return () => { alive = false }
+  }, [api, agent, file])
+
+  if (err) return <div className="text-xs text-red-600">{err}</div>
+  if (!msgs) return <div className="py-3 text-center text-gray-500"><Spinner /></div>
+  if (!msgs.length) return <Empty>That transcript has no messages.</Empty>
+  return <Transcript messages={msgs} />
+}
+
 export function KitTranscripts({ api, agent }: { api: KitApi; agent: string }) {
   const [open, setOpen] = React.useState(false)
   const [runs, setRuns] = React.useState<Run[] | null>(null)

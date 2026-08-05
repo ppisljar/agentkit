@@ -14,6 +14,7 @@
 import React from 'react'
 import { ApplyResult, Finding, Job, KitApi, Report, ReportItem, RowId, RunningRun, ThreadMessage, fmtAgo } from './api'
 import { Badge, Button, Card, Empty, ErrorNote, LogBox, Markdown, Spinner, cx } from './ui'
+import { KitTranscript } from './KitTranscript'
 
 /** A project the reports may belong to. `key` is what the API filters on. */
 export type ProjectTag = { key: string; label: string; color?: string; url?: string }
@@ -174,7 +175,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
       )}
 
       {open && !inlineDetail ? (
-        <ReportDetail api={api} base={base} report={open} agentLabels={agentLabels} project={byKey[open.project!]}
+        <ReportDetail api={api} report={open} agentLabels={agentLabels} project={byKey[open.project!]}
           onBack={() => { setOpen(null); load() }}
           onChanged={() => refreshOpen(open.id)} onError={setErr} />
       ) : (
@@ -248,7 +249,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
               </button>
               {expanded && open && (
                 <div className="border-t border-gray-200 px-4 pb-3.5 pt-1">
-                  <ReportDetail api={api} base={base} report={open} agentLabels={agentLabels}
+                  <ReportDetail api={api} report={open} agentLabels={agentLabels}
                     project={byKey[open.project!]} inline
                     onBack={() => setOpen(null)}
                     onChanged={() => refreshOpen(open.id)} onError={setErr} />
@@ -299,8 +300,8 @@ function FindingLine({ f }: { f: Finding | string }) {
   )
 }
 
-function ReportDetail({ api, base, report, onBack, onChanged, onError, agentLabels, project, inline }: {
-  api: KitApi; base: string; report: Report; onBack: () => void; onChanged: () => void
+function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project, inline }: {
+  api: KitApi; report: Report; onBack: () => void; onChanged: () => void
   onError: (e: string) => void
   agentLabels?: Record<string, string>
   project?: ProjectTag
@@ -368,11 +369,17 @@ function ReportDetail({ api, base, report, onBack, onChanged, onError, agentLabe
         agentLabels={agentLabels} />
 
       {report.transcript && (
-        <a className="mt-2.5 inline-block text-xs text-blue-600 hover:underline"
-           href={`${base}/agent_history/${encodeURIComponent(report.agent)}/${encodeURIComponent(report.transcript)}`}
-           target="_blank" rel="noreferrer">
-          Conversation history ↗
-        </a>
+        /* The conversation that produced this report, in place. It used to link out to the raw
+           .jsonl, which is technically the same data and unreadable. Collapsed because a run is
+           hundreds of messages and the report is the summary you came for. */
+        <details className="mt-2.5">
+          <summary className="cursor-pointer text-xs text-gray-400 hover:text-gray-600">
+            Conversation history
+          </summary>
+          <div className="mt-2">
+            <KitTranscript api={api} agent={report.agent} file={report.transcript} />
+          </div>
+        </details>
       )}
 
       {report.detail && (
