@@ -182,37 +182,55 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
 
     @bp.post("/reports/apply")
     def apply_decisions():
-        name = "applydecisions"
-        if name not in cfg.agents:
-            return _err(400, "host declares no 'applydecisions' agent")
-        spec = registry.resolve(cfg, store, name)
-        # Only the items this agent owns. Anything raised by an agent that handles its own
-        # decisions is started separately, so the generic apply agent is never handed a finding
-        # from a domain it knows nothing about.
+        """Carry out every approved/answered item, each by the agent that owns it.
+
+        Items are routed per raising agent (reports.route_decisions), and each handler is run HERE
+        with the apply prompt — not via the scheduler. Asking the scheduler to run an agent runs
+        its NORMAL job: approving a finding would have re-run selfcheck's daily sweep or sldubs'
+        download queueing instead of applying anything. Only script-based handlers are delegated,
+        because their script owns the whole run and reads its own outstanding items.
+        """
         routed = reports.route_decisions(cfg, store)
-        prompt, ids = reports.build_apply_prompt(store, spec.prompt, routed.get(name, []))
-        others = {t: [i["id"] for i in v] for t, v in routed.items() if t != name}
-        for task in others:
-            with contextlib.suppress(KeyError):
-                sched.request_run(task)
-        if not ids:
-            return jsonify({"ok": True, "skipped": "nothing approved for this agent",
-                            "delegated": others})
+        if not routed:
+            return jsonify({"ok": True, "skipped": "nothing approved"})
 
-        def _work(job_id: int, _params: dict) -> None:
-            res = agent_run.run(cfg, spec, prompt=prompt)
-            payload = agent_run.extract_json(res["result"])
-            rid = reports.save(store, name, payload, raw=res["result"],
-                               duration_sec=res["duration_sec"], ok=res["returncode"] == 0)
-            done = [a.get("item_id") for a in ((payload or {}).get("actions") or [])
-                    if a.get("done") and a.get("item_id") is not None]
-            reports.mark_done(store, done or ids)
-            jobs.update(store, job_id, status="done",
-                        result={"report": rid, "items": done or ids},
-                        log=res["result"][-20000:])
+        started, delegated, failed = [], [], []
+        for task, its in routed.items():
+            ids = [i["id"] for i in its]
+            if task not in cfg.agents:
+                failed.append({"task": task, "error": "no such agent", "items": ids})
+                continue
+            spec = registry.resolve(cfg, store, task)
+            if spec.script:
+                try:
+                    sched.request_run(task)
+                    delegated.append({"task": task, "items": ids})
+                except KeyError as e:
+                    failed.append({"task": task, "error": str(e), "items": ids})
+                continue
 
-        job = jobs.run_bg(store, "agent", f"agent:{name}", {"items": ids}, _work)
-        return jsonify({"ok": True, "job": job, "items": ids})
+            prompt, _ = reports.build_apply_prompt(store, spec.prompt, its)
+
+            def _work(job_id: int, _params: dict, task=task, spec=spec, prompt=prompt, ids=ids):
+                res = agent_run.run(cfg, spec, prompt=prompt)
+                payload = agent_run.extract_json(res["result"])
+                rid = reports.save(store, task, payload, raw=res["result"],
+                                   duration_sec=res["duration_sec"],
+                                   ok=res["returncode"] == 0, session=res["session"])
+                # Close only what the agent SAYS it did. An item it declined stays open — a
+                # refusal silently reading as "carried out" is the worst outcome here.
+                acted = {a.get("item_id"): a for a in ((payload or {}).get("actions") or [])
+                         if isinstance(a, dict)}
+                done = [i for i in ids if not acted.get(i) or acted[i].get("done")]
+                reports.mark_done(store, done)
+                jobs.update(store, job_id, status="done",
+                            result={"report": rid, "items": done},
+                            log=(res["result"] or "")[-20000:])
+
+            job = jobs.run_bg(store, "agent", f"apply:{task}", {"task": task, "items": ids}, _work)
+            started.append({"task": task, "job": job, "items": ids})
+
+        return jsonify({"ok": True, "started": started, "delegated": delegated, "failed": failed})
 
     # --------------------------------------------------------------- scheduler
     @bp.get("/schedule")

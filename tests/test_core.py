@@ -255,22 +255,40 @@ def _raise_item(kit, agent, kind="proposal", text="do the thing"):
     return int(row["id"])
 
 
-def test_decisions_go_back_to_the_agent_that_raised_them(kit):
-    """A finding about a domain the generic apply agent knows nothing about must not land on it."""
+def test_an_agent_handles_its_own_decisions_by_default(kit):
+    """The agent that raised a finding answers for it. It wrote the thing and knows the domain;
+    a general-purpose apply agent has to rediscover it before it can act safely."""
     from dataclasses import replace
     kit.cfg.agents["dubs"] = replace(kit.cfg.agents["healthcheck"], name="dubs",
                                      decisions_task="dubsmaint")
 
-    own = _raise_item(kit, "dubs")
-    other = _raise_item(kit, "healthcheck")
+    own = _raise_item(kit, "dubs")            # explicit override -> its maintenance variant
+    other = _raise_item(kit, "healthcheck")   # no override -> itself
     reports.decide(kit.store, own, True)
     reports.decide(kit.store, other, True)
 
     routed = reports.route_decisions(kit.cfg, kit.store)
     assert [i["id"] for i in routed["dubsmaint"]] == [own]
-    assert [i["id"] for i in routed["applydecisions"]] == [other]
-    # and the per-agent filter agrees
+    assert [i["id"] for i in routed["healthcheck"]] == [other]
+    assert "applydecisions" not in routed
     assert [i["id"] for i in reports.actionable(kit.store, agent="dubs")] == [own]
+
+
+def test_a_script_agent_falls_back_to_the_apply_agent(kit):
+    """A script-based agent's script owns the whole run and ignores any prompt we hand it, so
+    'apply' would silently re-run its normal job — queueing downloads, crawling — instead of
+    applying anything. Those go to the apply agent unless they name a decisions_task."""
+    from dataclasses import replace
+    kit.cfg.agents["scripted"] = replace(kit.cfg.agents["healthcheck"], name="scripted",
+                                         script=["wrapper.py"])
+    iid = _raise_item(kit, "scripted")
+    reports.decide(kit.store, iid, True)
+
+    assert reports.decisions_handler(kit.cfg, "scripted") == "applydecisions"
+    assert [i["id"] for i in reports.route_decisions(kit.cfg, kit.store)["applydecisions"]] == [iid]
+    # ...but an explicit decisions_task still wins, script or not
+    kit.cfg.agents["scripted"] = replace(kit.cfg.agents["scripted"], decisions_task="scriptedmaint")
+    assert reports.decisions_handler(kit.cfg, "scripted") == "scriptedmaint"
 
 
 def test_apply_agent_is_not_handed_another_agents_items(kit):
@@ -284,7 +302,7 @@ def test_apply_agent_is_not_handed_another_agents_items(kit):
     reports.decide(kit.store, other, True)
 
     routed = reports.route_decisions(kit.cfg, kit.store)
-    prompt, ids = reports.build_apply_prompt(kit.store, "FOOTER", routed["applydecisions"])
+    prompt, ids = reports.build_apply_prompt(kit.store, "FOOTER", routed["healthcheck"])
     assert ids == [other]
     assert "vacuum the database" in prompt
     assert "rewrite the dub resolver" not in prompt

@@ -9,9 +9,13 @@ A scheduled agent (health check, improvements) ends its run with one fenced ```j
      "questions": ["something it needs decided"],
      "proposals": ["a risky change it did NOT make but suggests"]}
 
-Questions and proposals become rows the human answers or approves in the UI. Approved items are
-then handed to the `applydecisions` agent, which may act *only* on them. That split is the whole
-safety model: the investigating agent is read-only and cannot act on its own conclusions.
+Questions and proposals become rows the human answers or approves in the UI. A decision is then
+carried out by the agent that RAISED it (see decisions_handler) — it wrote the finding and knows
+the domain — acting *only* on the approved items. The approval step is the safety boundary: an
+agent may investigate freely but cannot act on its own conclusions until a human says so.
+
+Agents that cannot do this — script-based ones, whose script owns the run — fall back to the
+generic `applydecisions` agent, as does anything that names it explicitly.
 """
 
 from __future__ import annotations
@@ -276,18 +280,40 @@ def actionable(store: Store, agent: str | None = None) -> list[dict]:
     return [dict(r) for r in store.query(sql + " ORDER BY i.id", params)]
 
 
-def route_decisions(cfg, store) -> dict[str, list[dict]]:
-    """{task -> items it should carry out} for everything currently awaiting action.
+APPLY_AGENT = "applydecisions"
 
-    An agent that declares `decisions_task` handles its own items there; everything else falls to
-    'applydecisions'. Without this every decision went to the apply agent regardless of who raised
-    it, so a finding about a download pipeline was handed to an agent with none of that context.
+
+def decisions_handler(cfg, agent: str | None) -> str:
+    """Which task carries out a decision on an item `agent` raised.
+
+    BY DEFAULT, the agent that raised it. It wrote the finding, it knows the domain, and it is
+    usually the thing that has to change — handing "your download resolver picked the wrong
+    release" to a general-purpose apply agent means that agent must rediscover the whole pipeline
+    before it can act safely, and it answers as a stranger to its own report.
+
+    Two escapes:
+      * `AgentSpec.decisions_task` names something else explicitly — a dedicated maintenance
+        variant, or "applydecisions" to opt out entirely.
+      * A SCRIPT-based agent cannot handle its own decisions unless it says so. Its script owns the
+        whole run and ignores the prompt we would hand it, so approving something would silently
+        re-run the script's normal job (queueing downloads, crawling) instead of applying anything.
+        Those fall back to the apply agent unless they declare a decisions_task.
     """
+    spec = cfg.agents.get(agent or "")
+    if not spec:
+        return APPLY_AGENT
+    if spec.decisions_task:
+        return spec.decisions_task
+    if spec.script:
+        return APPLY_AGENT
+    return spec.name
+
+
+def route_decisions(cfg, store) -> dict[str, list[dict]]:
+    """{task -> items it should carry out} for everything currently awaiting action."""
     out: dict[str, list[dict]] = {}
     for it in actionable(store):
-        spec = cfg.agents.get(it.get("agent") or "")
-        task = (spec.decisions_task if spec and spec.decisions_task else "applydecisions")
-        out.setdefault(task, []).append(it)
+        out.setdefault(decisions_handler(cfg, it.get("agent")), []).append(it)
     return out
 
 
