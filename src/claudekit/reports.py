@@ -32,7 +32,7 @@ def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
          duration_sec: int = 0, ok: bool = True,
          status: str | None = None, summary: str | None = None,
          detail: str | None = None, findings: list | None = None,
-         session: str | None = None) -> int:
+         session: str | None = None, transcript: str | None = None) -> int:
     """Persist one agent run. `payload` is the parsed json block (None if the agent produced none).
 
     The explicit keywords override whatever the payload says. That matters for wrapper-script
@@ -50,10 +50,10 @@ def save(store: Store, agent: str, payload: dict | None, *, raw: str = "",
 
     cur = store.execute(
         """INSERT INTO ck_reports (created, agent, status, summary, detail, findings,
-                                   duration_sec, ok, session)
-           VALUES (?,?,?,?,?,?,?,?,?)""",
+                                   duration_sec, ok, session, transcript)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
         (time.time(), agent, status, summary, raw[:200_000],
-         json.dumps(findings), int(duration_sec), 1 if ok else 0, session),
+         json.dumps(findings), int(duration_sec), 1 if ok else 0, session, transcript),
     )
     rid = int(cur.lastrowid)
 
@@ -150,6 +150,32 @@ def items(store: Store, rid: int | None = None, status: str | None = None) -> li
         sql += " AND status=?"; params.append(status)
     sql += " ORDER BY id"
     return [dict(r) for r in store.query(sql, tuple(params))]
+
+
+def running_runs(store: Store) -> list[dict]:
+    """Agent runs happening RIGHT NOW, shaped like provisional reports.
+
+    A report only exists once a run finishes, so an agent working for ten minutes was invisible on
+    the page that exists to show what agents are doing — you had to go to Settings to find out
+    anything was happening at all. These are rendered at the top of the list and replaced by the
+    real report when it lands.
+
+    Read from the job rows rather than any in-memory state, so it is true across the web/daemon
+    process split, and filtered through jobs._row so a run orphaned by a crash stops being
+    advertised as live.
+    """
+    from . import jobs
+    out = []
+    for j in jobs.recent(store, "agent", 25):
+        if j.get("status") != "running":
+            continue
+        agent = (j.get("params") or {}).get("task")
+        if not agent:
+            continue
+        out.append({"agent": agent, "started": j.get("created"), "job": j.get("id"),
+                    "label": j.get("label"), "running": True})
+    out.sort(key=lambda r: r["started"] or 0, reverse=True)
+    return out
 
 
 def open_items(store: Store) -> list[dict]:

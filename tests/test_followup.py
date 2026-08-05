@@ -269,3 +269,34 @@ def test_http_ask_and_thread(client, kit, fake_run):  # noqa: F811
     _settle(kit, r.get_json()["message_id"])
     t = client.get(f'/api/kit/reports/{rid}/thread').get_json()
     assert [m["role"] for m in t] == ["user", "agent"]
+
+
+def test_transcript_is_recorded_on_the_report(kit):  # noqa: F811
+    """The .jsonl is already captured and already served; only the link to the report was missing,
+    so there was no way to get from a report to the conversation that produced it."""
+    rid = reports.save(kit.store, "healthcheck", {"summary": "s"},
+                       session="sid-1", transcript="20260805-101010-sid-1.jsonl")
+    assert reports.get(kit.store, rid)["transcript"] == "20260805-101010-sid-1.jsonl"
+
+
+def test_running_agents_appear_as_provisional_reports(kit):  # noqa: F811
+    """An agent working for ten minutes was invisible on the page that exists to show what agents
+    are doing — a report only exists once the run FINISHES."""
+    from claudekit import jobs
+    jid = jobs.create(kit.store, "agent", "agent:healthcheck", {"task": "healthcheck"})
+
+    live = reports.running_runs(kit.store)
+    assert [r["agent"] for r in live] == ["healthcheck"]
+    assert live[0]["running"] is True and live[0]["job"] == jid
+
+    jobs.update(kit.store, jid, status="done")
+    assert reports.running_runs(kit.store) == []
+
+
+def test_an_orphaned_run_is_not_advertised_as_live(kit):  # noqa: F811
+    """A job left 'running' by a crashed process must not sit on the reports page forever."""
+    from claudekit import jobs
+    jid = jobs.create(kit.store, "agent", "agent:healthcheck", {"task": "healthcheck"})
+    kit.store.execute("UPDATE ck_jobs SET updated=? WHERE id=?",
+                      (time.time() - jobs.STALE_SEC - 60, jid))
+    assert reports.running_runs(kit.store) == []

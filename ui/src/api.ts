@@ -106,6 +106,9 @@ export type ThreadMessage = {
 }
 export type AskResult = { ok: boolean; message_id?: number; job?: number; agent?: string; resumed?: boolean; error?: string }
 
+/** An agent run in flight — a provisional row until its report lands. */
+export type RunningRun = { agent: string; started: number; job: number; label?: string; running: true }
+
 export type Report = ProjectTagged & {
   id: RowId
   created: number
@@ -118,6 +121,8 @@ export type Report = ProjectTagged & {
   open_items?: number
   items?: ReportItem[]
   detail?: string
+  /** the run's captured .jsonl under agent_history/<agent>/ */
+  transcript?: string
 }
 
 /** One project in a fleet — GET {base}/projects. `ok: false` means its database could not be
@@ -236,6 +241,7 @@ export class KitApi {
 
   reports = (limit = 30, project?: string | null) =>
     this.req<Report[]>(`/reports${this.qs({ limit, project })}`)
+  runningRuns = () => this.req<RunningRun[]>('/reports/running')
   openItems = (project?: string | null) =>
     this.req<ReportItem[]>(`/reports/open${this.qs({ project })}`)
   report = (id: RowId) => this.req<Report>(`/reports/${id}`)

@@ -18,7 +18,8 @@ SCHEMA = """
 -- agent runs: findings/questions/proposals surfaced to the human
 CREATE TABLE IF NOT EXISTS ck_reports (
   id INTEGER PRIMARY KEY, created REAL, agent TEXT, status TEXT,
-  summary TEXT, detail TEXT, findings TEXT, duration_sec INTEGER, ok INTEGER
+  summary TEXT, detail TEXT, findings TEXT, duration_sec INTEGER, ok INTEGER,
+  session TEXT, transcript TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_ck_reports_created ON ck_reports(created DESC);
 
@@ -91,10 +92,12 @@ CREATE TABLE IF NOT EXISTS ck_schedule_task (
 # existing table, so they are ALTERed in on connect.
 _ADDED_COLUMNS = {
     "ck_schedule_task": {"run_requested": "REAL", "last_new_count": "INTEGER"},
-    # The run that produced this report. Needed to offer "continue that conversation" on a
-    # follow-up: the session id used to survive only in ck_jobs.result for kit-run agents, and not
-    # at all for wrapper-script agents, so there was nothing to resume from.
-    "ck_reports": {"session": "TEXT"},
+    # session: the run that produced this report, so a follow-up can continue that conversation.
+    #   It used to survive only in ck_jobs.result for kit-run agents, and not at all for
+    #   wrapper-script agents, so there was nothing to resume from.
+    # transcript: that run's captured .jsonl under <data>/agent_history/<agent>/. The file was
+    #   already copied and already served — only the association with the report was missing.
+    "ck_reports": {"session": "TEXT", "transcript": "TEXT"},
     "ck_report_messages": {"findings": "TEXT", "rstatus": "TEXT", "summary": "TEXT"},
     "ck_report_items": {"message_id": "INTEGER"},
 }

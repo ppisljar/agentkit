@@ -12,7 +12,7 @@
  */
 
 import React from 'react'
-import { ApplyResult, Finding, Job, KitApi, Report, ReportItem, RowId, ThreadMessage, fmtAgo } from './api'
+import { ApplyResult, Finding, Job, KitApi, Report, ReportItem, RowId, RunningRun, ThreadMessage, fmtAgo } from './api'
 import { Badge, Button, Card, Empty, ErrorNote, LogBox, Markdown, Spinner, cx } from './ui'
 
 /** A project the reports may belong to. `key` is what the API filters on. */
@@ -45,6 +45,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
   const [reports, setReports] = React.useState<Report[]>([])
   const [open, setOpen] = React.useState<Report | null>(null)
   const [pending, setPending] = React.useState<ReportItem[]>([])
+  const [liveRuns, setLiveRuns] = React.useState<RunningRun[]>([])
   const [err, setErr] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [applyJob, setApplyJob] = React.useState<number | null>(null)
@@ -56,13 +57,24 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
 
   const load = React.useCallback(async () => {
     try {
-      const [r, p] = await Promise.all([api.reports(30, project), api.openItems(project)])
+      const [r, p, live] = await Promise.all([
+        api.reports(30, project), api.openItems(project),
+        api.runningRuns().catch(() => [] as RunningRun[]),   // a fleet api may not offer it
+      ])
       setReports(r)
       setPending(p)
+      setLiveRuns(live)
     } catch (e: any) { setErr(e.message) }
   }, [api, project])
 
   React.useEffect(() => { load() }, [load])
+  // Only poll while an agent is actually working — a run takes minutes, and an idle page has
+  // nothing to refresh for.
+  React.useEffect(() => {
+    if (!liveRuns.length) return
+    const t = setInterval(load, 5000)
+    return () => clearInterval(t)
+  }, [liveRuns.length, load])
 
   // poll the apply agent while it works
   React.useEffect(() => {
@@ -162,7 +174,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
       )}
 
       {open && !inlineDetail ? (
-        <ReportDetail api={api} report={open} agentLabels={agentLabels} project={byKey[open.project!]}
+        <ReportDetail api={api} base={base} report={open} agentLabels={agentLabels} project={byKey[open.project!]}
           onBack={() => { setOpen(null); load() }}
           onChanged={() => refreshOpen(open.id)} onError={setErr} />
       ) : (
@@ -179,7 +191,30 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
             </Card>
           )}
 
-          {reports.length === 0 && (
+          {/* Runs in flight. A report only exists once a run FINISHES, so without these the page
+              that exists to show what agents are doing said nothing at all for the ten minutes one
+              was working. Replaced by the real report when it lands. */}
+          {liveRuns.length > 0 && (
+            <div className="mb-2 space-y-2">
+              {liveRuns.map((r) => (
+                <div key={r.job}
+                  className="flex items-center gap-2.5 rounded-xl border border-blue-400/40 bg-blue-400/10 px-3.5 py-2.5">
+                  <Spinner />
+                  <span className="shrink-0 text-[13px] text-gray-500">
+                    {agentLabels?.[r.agent] || r.agent}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-gray-900">
+                    running…
+                  </span>
+                  <span className="shrink-0 whitespace-nowrap text-[11.5px] text-gray-400">
+                    started {fmtAgo(r.started)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {reports.length === 0 && liveRuns.length === 0 && (
             <Empty>No reports yet. Run an agent from Settings → Agents.</Empty>
           )}
 
@@ -213,7 +248,7 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
               </button>
               {expanded && open && (
                 <div className="border-t border-gray-200 px-4 pb-3.5 pt-1">
-                  <ReportDetail api={api} report={open} agentLabels={agentLabels}
+                  <ReportDetail api={api} base={base} report={open} agentLabels={agentLabels}
                     project={byKey[open.project!]} inline
                     onBack={() => setOpen(null)}
                     onChanged={() => refreshOpen(open.id)} onError={setErr} />
@@ -264,8 +299,8 @@ function FindingLine({ f }: { f: Finding | string }) {
   )
 }
 
-function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, project, inline }: {
-  api: KitApi; report: Report; onBack: () => void; onChanged: () => void
+function ReportDetail({ api, base, report, onBack, onChanged, onError, agentLabels, project, inline }: {
+  api: KitApi; base: string; report: Report; onBack: () => void; onChanged: () => void
   onError: (e: string) => void
   agentLabels?: Record<string, string>
   project?: ProjectTag
@@ -331,6 +366,14 @@ function ReportDetail({ api, report, onBack, onChanged, onError, agentLabels, pr
 
       <FollowUp api={api} report={report} project={project} onError={onError}
         agentLabels={agentLabels} />
+
+      {report.transcript && (
+        <a className="mt-2.5 inline-block text-xs text-blue-600 hover:underline"
+           href={`${base}/agent_history/${encodeURIComponent(report.agent)}/${encodeURIComponent(report.transcript)}`}
+           target="_blank" rel="noreferrer">
+          Conversation history ↗
+        </a>
+      )}
 
       {report.detail && (
         <details className="mt-2.5">

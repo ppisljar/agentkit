@@ -318,7 +318,8 @@ class Scheduler:
         payload = agent_run.extract_json(text)
         ok = res["returncode"] == 0
         rid = reports.save(self.store, task, payload, raw=text,
-                           duration_sec=res["duration_sec"], ok=ok)
+                           duration_sec=res["duration_sec"], ok=ok,
+                           session=res["session"], transcript=res["transcript"])
         jobs.update(self.store, job_id,
                     status="done" if ok else "error",
                     result={"report": rid, "transcript": res["transcript"],

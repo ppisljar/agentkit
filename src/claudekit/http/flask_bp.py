@@ -125,6 +125,11 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
         return jsonify(reports.recent(store, limit=int(request.args.get("limit", 30)),
                                       agent=request.args.get("agent")))
 
+    @bp.get("/reports/running")
+    def running_reports():
+        """Agent runs in flight — provisional rows for the reports list."""
+        return jsonify(reports.running_runs(store))
+
     @bp.get("/reports/open")
     def open_items():
         return jsonify(reports.open_items(store))
@@ -216,7 +221,8 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
                 payload = agent_run.extract_json(res["result"])
                 rid = reports.save(store, task, payload, raw=res["result"],
                                    duration_sec=res["duration_sec"],
-                                   ok=res["returncode"] == 0, session=res["session"])
+                                   ok=res["returncode"] == 0, session=res["session"],
+                                   transcript=res["transcript"])
                 # Close only what the agent SAYS it did. An item it declined stays open — a
                 # refusal silently reading as "carried out" is the worst outcome here.
                 acted = {a.get("item_id"): a for a in ((payload or {}).get("actions") or [])

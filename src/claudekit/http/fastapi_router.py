@@ -111,6 +111,11 @@ def build_router(kit, prefix: str = "/api/kit") -> APIRouter:
     def list_reports(limit: int = 30, agent: str | None = None) -> list[dict]:
         return reports.recent(store, limit=limit, agent=agent)
 
+    @r.get("/reports/running")
+    def running_reports() -> list:
+        """Agent runs in flight — provisional rows for the reports list."""
+        return reports.running_runs(store)
+
     @r.get("/reports/open")
     def open_items() -> list[dict]:
         return reports.open_items(store)
