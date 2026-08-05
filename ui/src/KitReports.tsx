@@ -451,7 +451,10 @@ function FollowUp({ api, report, project, onError, agentLabels }: {
         <div className="mb-3 space-y-3">
           {thread.map((m) => (
             <div key={m.id} className={cx('rounded-lg px-3 py-2 text-sm whitespace-pre-wrap',
-              m.role === 'user' ? 'bg-blue-50 text-gray-900' : 'bg-gray-50 text-gray-800')}>
+              // An ALPHA tint, not bg-blue-50: the flat 50-tints are the one thing the grey ramp does not
+              // invert, so a pale blue box kept its colour while text-gray-900 flipped to light —
+              // light ink on a light box. Alpha over the card works in either theme.
+              m.role === 'user' ? 'bg-blue-400/10 text-gray-900' : 'bg-gray-50 text-gray-800')}>
               <div className="mb-1 text-xs font-medium text-gray-500">
                 {m.role === 'user' ? 'You' : (agentLabels?.[m.agent || ''] || m.agent)}
                 {' · '}{fmtAgo(m.created)}

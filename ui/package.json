@@ -6,6 +6,13 @@
   "//": "These components are consumed by SOURCE from each host's bundler, so nothing is built here. The dependencies exist purely so TypeScript can resolve React when a host typechecks files at this path: without a node_modules alongside them, tsc walking up from ui/src finds nothing and every JSX tag collapses into an implicit-any cascade in the HOST's build.",
   "devDependencies": {
     "@types/react": "^18.2.0",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "react": "^18.2.0"
-  }
+  },
+  "dependencies": {
+    "react-markdown": "^9.0.0",
+    "react-syntax-highlighter": "^15.5.0",
+    "remark-gfm": "^4.0.0"
+  },
+  "//deps": "Real dependencies, installed HERE. Hosts bundle these components from source, and both Vite and tsc resolve their bare imports by walking up from this directory \u2014 verified: HomeFlix builds against them without installing anything, and its bundle still contains exactly one React copy. react is a devDependency only (types + resolution); it must never be installed as a real one or a host would bundle two React instances and every hook in these components would break."
 }

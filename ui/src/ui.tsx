@@ -6,6 +6,10 @@
  */
 
 import React from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 export const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(' ')
 
@@ -135,50 +139,45 @@ export function Empty({ children }: { children: React.ReactNode }) {
 /**
  * Agent prose, rendered.
  *
- * Agents answer in Markdown, and printing it verbatim shows "## Summary" and "**built**" as
- * literal characters. This covers what they actually emit — headings, bold, inline code, fenced
- * blocks — and lets anything else fall through as plain text, which is the right failure for a
- * construct we don't handle. Built as React nodes rather than innerHTML: this is model output and
- * must never be interpreted as markup.
+ * react-markdown rather than the hand-rolled pass this replaced: agents write real Markdown —
+ * tables, nested lists, links, reference syntax — and a regex renderer only ever covers the
+ * constructs you thought to handle, silently printing the rest as literal characters. GFM is on
+ * because agents lean on tables and strikethrough.
+ *
+ * Untrusted by construction: this is model output, so no raw HTML is allowed through (react-markdown
+ * disables it by default and nothing here re-enables it) and links carry noopener.
  */
 export function Markdown({ text, className }: { text?: string | null; className?: string }) {
-  const out: React.ReactNode[] = []
-  const blocks = (text || '').split(/```/)
-  blocks.forEach((chunk, bi) => {
-    if (bi % 2 === 1) {
-      out.push(
-        <pre key={`f${bi}`} className="my-2 overflow-auto rounded-md bg-gray-100 p-2 text-xs">
-          {chunk.replace(/^[a-zA-Z]*\n/, '').trim()}
-        </pre>)
-      return
-    }
-    chunk.split('\n').forEach((line, li) => {
-      const k = `${bi}-${li}`
-      const h = /^(#{1,4})\s+(.*)$/.exec(line)
-      if (h) out.push(<div key={k} className="mt-2 font-semibold">{mdInline(h[2], k)}</div>)
-      else if (!line.trim()) out.push(<div key={k} className="h-2" />)
-      else out.push(<div key={k}>{mdInline(line, k)}</div>)
-    })
-  })
-  return <div className={cx('text-sm leading-relaxed', className)}>{out}</div>
-}
-
-// **bold** and `code`, in one pass so neither can swallow the other.
-function mdInline(s: string, key: string): React.ReactNode[] {
-  const parts: React.ReactNode[] = []
-  const re = /\*\*(.+?)\*\*|`([^`]+)`/g
-  let last = 0, i = 0
-  let m: RegExpExecArray | null
-  while ((m = re.exec(s))) {
-    if (m.index > last) parts.push(s.slice(last, m.index))
-    parts.push(m[1]
-      ? <strong key={`${key}b${i}`}>{m[1]}</strong>
-      : <code key={`${key}c${i}`} className="rounded bg-gray-100 px-1 text-xs">{m[2]}</code>)
-    last = m.index + m[0].length
-    i++
-  }
-  if (last < s.length) parts.push(s.slice(last))
-  return parts
+  if (!text) return null
+  return (
+    <div className={cx('ck-md text-sm leading-relaxed', className)}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ children, ...p }) => (
+            <a {...p} target="_blank" rel="noreferrer noopener"
+               className="text-blue-600 hover:underline">{children}</a>
+          ),
+          code: ({ className: cls, children, ...p }: any) => {
+            const lang = /language-(\w+)/.exec(cls || '')?.[1]
+            const body = String(children).replace(/\n$/, '')
+            // Inline code has no language and no newlines; a fenced block gets the highlighter.
+            if (!lang && !body.includes('\n')) {
+              return <code className="rounded bg-gray-100 px-1 text-xs" {...p}>{children}</code>
+            }
+            return (
+              <SyntaxHighlighter language={lang || 'text'} style={vscDarkPlus} PreTag="div"
+                customStyle={{ margin: '0.5rem 0', borderRadius: '0.375rem', fontSize: '0.75rem' }}>
+                {body}
+              </SyntaxHighlighter>
+            )
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
 }
 
 export function LogBox({ text, className }: { text?: string | null; className?: string }) {
