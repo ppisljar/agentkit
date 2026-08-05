@@ -91,7 +91,10 @@ CREATE TABLE IF NOT EXISTS ck_schedule_task (
 # Columns added after the first release. CREATE TABLE IF NOT EXISTS cannot add a column to an
 # existing table, so they are ALTERed in on connect.
 _ADDED_COLUMNS = {
-    "ck_schedule_task": {"run_requested": "REAL", "last_new_count": "INTEGER"},
+    "ck_schedule_task": {"run_requested": "REAL", "last_new_count": "INTEGER",
+                         # why the run was asked for: NULL = its normal job,
+                         # "decisions" = carry out approved items (AgentSpec.decisions_argv)
+                         "run_mode": "TEXT"},
     # session: the run that produced this report, so a follow-up can continue that conversation.
     #   It used to survive only in ck_jobs.result for kit-run agents, and not at all for
     #   wrapper-script agents, so there was nothing to resume from.

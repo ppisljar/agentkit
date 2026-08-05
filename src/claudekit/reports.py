@@ -330,7 +330,9 @@ def decisions_handler(cfg, agent: str | None) -> str:
         return APPLY_AGENT
     if spec.decisions_task:
         return spec.decisions_task
-    if spec.script:
+    if spec.script and not spec.decisions_argv:
+        # Its script owns the whole run and would ignore any prompt we hand it, so without a
+        # decisions mode of its own an "apply" would just re-run its normal job.
         return APPLY_AGENT
     return spec.name
 

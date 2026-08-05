@@ -47,6 +47,11 @@ class AgentSpec:
     # The named task is expected to be a maintenance-only run — carry out the decisions, nothing
     # else — so it is usually a second AgentSpec wrapping the same script with a flag.
     decisions_task: str | None = None
+    # Extra argv appended when THIS agent's script runs to carry out decisions. It is what lets one
+    # script-based agent be reused for its own approvals instead of needing a second agent that is
+    # really the same script with a flag — the shape that made the UI show two agents, and made
+    # "who answers for this report" the wrong answer by default.
+    decisions_argv: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

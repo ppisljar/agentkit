@@ -791,3 +791,33 @@ def test_schedule_interval_route_and_exposure(client):
     r = client.post('/api/kit/schedule/interval', json={"sec": 1800})
     assert r.status_code == 200 and r.get_json()["interval_sec"] == 1800
     assert client.get('/api/kit/schedule').get_json()["interval_sec"] == 1800
+
+
+def test_a_script_agent_applies_its_own_decisions_with_its_own_flag(kit):
+    """One agent, reused — not a second agent that is really the same script with an argument.
+
+    A script agent's script owns the run, so without a decisions mode it had to hand approvals to
+    the generic apply agent (or to a separate maintenance agent, which is what made "who answers
+    for this report" the wrong answer by default). decisions_argv gives it that mode.
+    """
+    from dataclasses import replace
+    script = kit.cfg.root / "wrapper.py"
+    script.write_text("import sys; print('argv=' + ' '.join(sys.argv[1:]))\n", encoding="utf-8")
+    kit.cfg.agents["dubs"] = replace(kit.cfg.agents["healthcheck"], name="dubs",
+                                     script=["wrapper.py"], decisions_argv=("--maintenance",))
+    kit.scheduler.sync_tasks()
+
+    # it now owns its own decisions instead of falling back
+    assert reports.decisions_handler(kit.cfg, "dubs") == "dubs"
+
+    # a decisions request runs the SAME script with its flag...
+    kit.scheduler.request_run("dubs", mode="decisions")
+    assert "dubs" in kit.scheduler.due()
+    j = _wait(kit, kit.scheduler.run_now("dubs")["job"])
+    assert "argv=--maintenance" in (j["log"] or ""), j["log"]
+
+    # ...while its NORMAL run is untouched
+    kit.scheduler.request_run("dubs")
+    kit.scheduler.due()
+    j2 = _wait(kit, kit.scheduler.run_now("dubs")["job"])
+    assert "argv=" in (j2["log"] or "") and "--maintenance" not in (j2["log"] or ""), j2["log"]

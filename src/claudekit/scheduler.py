@@ -57,6 +57,8 @@ class Scheduler:
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         self._running: set[str] = set()
+        # why each claimed run was requested, consumed by _run_agent_script
+        self._claimed_mode: dict[str, str | None] = {}
         self._lock = threading.Lock()
 
     # ---------------------------------------------------------------- task rows
@@ -291,6 +293,10 @@ class Scheduler:
         """
         argv = [self.cfg.python_bin, *spec.script] if isinstance(spec.script, (list, tuple)) \
             else [self.cfg.python_bin, spec.script]
+        # A decisions run is the SAME script with its own flag, so one agent covers both roles
+        # rather than a second agent existing purely to pass an argument.
+        if self._claimed_mode.pop(task, None) == "decisions" and spec.decisions_argv:
+            argv += list(spec.decisions_argv)
         started = _now()
         pre = self._fire_pre_run(task)
         # Record the task's outcome BEFORE the job flips to done — the job is the signal every
@@ -330,7 +336,7 @@ class Scheduler:
                      result=f"report {rid}", pre=pre)
 
     # ---------------------------------------------------------------- loop
-    def request_run(self, task: str) -> dict:
+    def request_run(self, task: str, mode: str | None = None) -> dict:
         """Ask whoever owns the loop to start `task`.
 
         Used by the web process when the scheduler lives in a separate daemon: it cannot start the
@@ -346,9 +352,12 @@ class Scheduler:
             if task not in self.cfg.agents:
                 raise KeyError(f"unknown task: {task}")
             self._ensure(task, "agent")
-        self.store.execute("UPDATE ck_schedule_task SET run_requested=? WHERE task=?",
-                           (_now(), task))
-        return {"ok": True, "task": task, "queued": True}
+        # `mode` rides along so the daemon knows WHY the run was asked for. Without it a request to
+        # apply decisions is indistinguishable from a request to do the agent's normal job, and a
+        # script agent would re-run its crawl/queue instead of applying anything.
+        self.store.execute("UPDATE ck_schedule_task SET run_requested=?, run_mode=? WHERE task=?",
+                           (_now(), mode, task))
+        return {"ok": True, "task": task, "queued": True, "mode": mode}
 
     def due(self) -> list[str]:
         """Tasks to start now: explicitly requested ones first, then those past their next_run."""
@@ -359,8 +368,10 @@ class Scheduler:
         # Explicit requests run even when the task is disabled or paused — the human asked.
         for r in self.store.query(
                 "SELECT task FROM ck_schedule_task WHERE run_requested IS NOT NULL"):
-            self.store.execute("UPDATE ck_schedule_task SET run_requested=NULL WHERE task=?",
-                               (r["task"],))
+            self._claimed_mode[r["task"]] = (self.get(r["task"]) or {}).get("run_mode")
+            self.store.execute(
+                "UPDATE ck_schedule_task SET run_requested=NULL, run_mode=NULL WHERE task=?",
+                (r["task"],))
             if r["task"] not in self._running:
                 out.append(r["task"])
 

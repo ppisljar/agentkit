@@ -208,7 +208,7 @@ def build_blueprint(kit, prefix: str = "/api/kit") -> Blueprint:
             spec = registry.resolve(cfg, store, task)
             if spec.script:
                 try:
-                    sched.request_run(task)
+                    sched.request_run(task, mode="decisions")
                     delegated.append({"task": task, "items": ids})
                 except KeyError as e:
                     failed.append({"task": task, "error": str(e), "items": ids})
