@@ -821,3 +821,32 @@ def test_a_script_agent_applies_its_own_decisions_with_its_own_flag(kit):
     kit.scheduler.due()
     j2 = _wait(kit, kit.scheduler.run_now("dubs")["job"])
     assert "argv=" in (j2["log"] or "") and "--maintenance" not in (j2["log"] or ""), j2["log"]
+
+
+def test_a_weekly_agent_gets_a_scheduler_row(tmp_path):
+    """A weekly agent used to get no row at all, so it never ran while still listed in the UI.
+
+    The row carries an interval and NO hour on purpose: `_mark_done` prefers `hour` when set and
+    would reschedule for tomorrow, quietly turning a weekly agent into a daily one.
+    """
+    from claudekit import AgentSpec, Kit, KitConfig
+
+    kit = Kit(KitConfig(
+        root=tmp_path, data_dir=tmp_path / "data", app_name="weeklytest",
+        agents={
+            "weekly_one": AgentSpec(name="weekly_one", label="W", description="d",
+                                    system="s", prompt="p", schedule="weekly"),
+            "daily_one": AgentSpec(name="daily_one", label="D", description="d",
+                                   system="s", prompt="p", schedule="daily"),
+            "on_demand": AgentSpec(name="on_demand", label="O", description="d",
+                                   system="s", prompt="p", schedule="on demand"),
+        },
+    ))
+    rows = {r["task"]: r for r in kit.scheduler.tasks()}
+
+    assert "weekly_one" in rows, "a weekly agent must be schedulable"
+    assert rows["weekly_one"]["interval_sec"] == 7 * 24 * 3600
+    assert rows["weekly_one"]["hour"] is None, "an hour would make it fire daily"
+
+    assert rows["daily_one"]["hour"] is not None, "daily agents stay hour-scheduled"
+    assert "on_demand" not in rows, "on-demand agents are not scheduled"

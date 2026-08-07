@@ -69,6 +69,15 @@ class Scheduler:
         for name, spec in self.cfg.agents.items():
             if spec.schedule == "daily":
                 self._ensure(name, "agent", hour=registry.get_hour(self.cfg, self.store, name))
+            elif spec.schedule == "weekly":
+                # An interval rather than an hour, deliberately: `_mark_done` prefers `hour` when it
+                # is set and would reschedule the task for tomorrow, turning a weekly agent into a
+                # daily one. With hour NULL it falls through to interval_sec and lands seven days
+                # after the last run.
+                #
+                # Without this branch a weekly agent got no scheduler row at all, so it silently
+                # never ran while still appearing in the agents list — which is how it presented.
+                self._ensure(name, "agent", interval_sec=7 * 24 * 3600)
         self._synced = True
 
     def _ensure_synced(self) -> None:
