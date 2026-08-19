@@ -68,6 +68,20 @@ export function KitReports({ base = '/api/kit', agentLabels, projects, title, su
     } catch (e: any) { setErr(e.message) }
   }, [api, project])
 
+  // A changed `base` means a different target — another project (hosts that carry the project in the
+  // API path get a new `base` per project) or the fleet↔project switch. Clear the previous target's
+  // data up front so it never shows under the new one, or lingers beside a 404, while the fresh
+  // load() below is still in flight. Scoped to `api` (memoized on `base`), so an in-place refresh of
+  // the SAME target — the 5s poll, an apply — does not blank the list.
+  React.useEffect(() => {
+    setReports([])
+    setPending([])
+    setLiveRuns([])
+    setOpen(null)
+    setErr(null)
+    setNotice(null)
+  }, [api])
+
   React.useEffect(() => { load() }, [load])
   // Only poll while an agent is actually working — a run takes minutes, and an idle page has
   // nothing to refresh for.

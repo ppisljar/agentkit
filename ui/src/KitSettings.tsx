@@ -79,10 +79,13 @@ export function KitSettings({ base = '/api/kit', extraTabs = [] }:
         ))}
       </div>
 
-      {tab === 'scrapers' && <ScrapersPanel api={api} />}
-      {tab === 'agents' && <AgentsPanel api={api} />}
-      {tab === 'services' && <ServicesPanel api={api} />}
-      {tab === 'config' && <ConfigPanel api={api} />}
+      {/* key={base}: a changed base means a different target (e.g. another project). Remounting the
+          active panel drops the previous target's agents/services/config up front, so they never
+          show under the new one — or linger beside a 404 — while the panel refetches. */}
+      {tab === 'scrapers' && <ScrapersPanel key={base} api={api} />}
+      {tab === 'agents' && <AgentsPanel key={base} api={api} />}
+      {tab === 'services' && <ServicesPanel key={base} api={api} />}
+      {tab === 'config' && <ConfigPanel key={base} api={api} />}
       {extraTabs.map((t) => t.id === tab && <div key={t.id}>{t.content}</div>)}
     </div>
   )
